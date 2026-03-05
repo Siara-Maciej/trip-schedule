@@ -78,12 +78,14 @@ function mergeHoursIntoShifts(
 export function generateSchedule(params: ScheduleParams): ScheduleResult {
   const {
     peopleCount,
-    durationDays,
+    totalHours,
     names = [],
     perPersonShiftHours = [],
     perPersonMinBreak = [],
     constraints = [],
   } = params;
+
+  const durationDays = Math.ceil(totalHours / 24);
 
   const errors: string[] = [];
   const coverageGaps: TimeGap[] = [];

@@ -26,7 +26,7 @@ describe('scheduler — granulacja 1h', () => {
   test('3 osoby, 8h praca, 3 doby, 8h przerwy → valid, każda osoba codziennie', () => {
     const result = generateSchedule({
       peopleCount: 3,
-      durationDays: 3,
+      totalHours: 24 * 3,
       ...uniformParams(3, 8, 8),
     });
     expect(result.valid).toBe(true);
@@ -43,7 +43,7 @@ describe('scheduler — granulacja 1h', () => {
   test('10 osób, 8h praca, 3 doby, 8h przerwy → valid, każda osoba codziennie', () => {
     const result = generateSchedule({
       peopleCount: 10,
-      durationDays: 3,
+      totalHours: 24 * 3,
       ...uniformParams(10, 8, 8),
     });
     expect(result.valid).toBe(true);
@@ -61,7 +61,7 @@ describe('scheduler — granulacja 1h', () => {
     const hoursPerShift = 8;
     const result = generateSchedule({
       peopleCount: 4,
-      durationDays: 3,
+      totalHours: 24 * 3,
       ...uniformParams(4, hoursPerShift, 8),
     });
 
@@ -78,7 +78,7 @@ describe('scheduler — granulacja 1h', () => {
     const minBreakHours = 8;
     const result = generateSchedule({
       peopleCount: 4,
-      durationDays: 3,
+      totalHours: 24 * 3,
       ...uniformParams(4, hoursPerShift, minBreakHours),
     });
     expect(result.valid).toBe(true);
@@ -110,7 +110,7 @@ describe('scheduler — granulacja 1h', () => {
   test('pokrycie: każda godzina każdego dnia ma co najmniej 1 osobę', () => {
     const result = generateSchedule({
       peopleCount: 4,
-      durationDays: 2,
+      totalHours: 24 * 2,
       ...uniformParams(4, 8, 8),
     });
     expect(result.valid).toBe(true);
@@ -129,7 +129,7 @@ describe('scheduler — granulacja 1h', () => {
   test('praca może być rozbita — nie musi być ciągła', () => {
     const result = generateSchedule({
       peopleCount: 4,
-      durationDays: 2,
+      totalHours: 24 * 2,
       ...uniformParams(4, 8, 8),
     });
     expect(result.valid).toBe(true);
@@ -139,7 +139,7 @@ describe('scheduler — granulacja 1h', () => {
   test('2 osoby, 12h praca, 2 doby, 12h przerwy → valid', () => {
     const result = generateSchedule({
       peopleCount: 2,
-      durationDays: 2,
+      totalHours: 24 * 2,
       ...uniformParams(2, 12, 12),
     });
     expect(result.valid).toBe(true);
@@ -149,7 +149,7 @@ describe('scheduler — granulacja 1h', () => {
   test('generowanie nazw osób', () => {
     const result = generateSchedule({
       peopleCount: 4,
-      durationDays: 1,
+      totalHours: 24 * 1,
       ...uniformParams(4, 8, 8),
       names: ['Jan', 'Anna'],
     });
@@ -166,7 +166,7 @@ describe('scheduler — granulacja 1h', () => {
   test('limit nocny: max 1 osoba w nocy (22-6)', () => {
     const result = generateSchedule({
       peopleCount: 4,
-      durationDays: 2,
+      totalHours: 24 * 2,
       ...uniformParams(4, 8, 8),
       constraints: [
         { type: 'nightShiftLimit', maxPeople: 1, nightStartHour: 22, nightEndHour: 6 },
@@ -188,7 +188,7 @@ describe('scheduler — granulacja 1h', () => {
   test('osoba zablokowana w godzinach 0-8 nie pracuje 0-8', () => {
     const result = generateSchedule({
       peopleCount: 3,
-      durationDays: 2,
+      totalHours: 24 * 2,
       ...uniformParams(3, 8, 8),
       constraints: [
         { type: 'personBlocked', personId: 0, startHour: 0, endHour: 8 },
@@ -206,7 +206,7 @@ describe('scheduler — granulacja 1h', () => {
   test('osoba zablokowana nocą (22-6) nie pracuje w tych godzinach', () => {
     const result = generateSchedule({
       peopleCount: 4,
-      durationDays: 2,
+      totalHours: 24 * 2,
       ...uniformParams(4, 8, 8),
       constraints: [
         { type: 'personBlocked', personId: 1, startHour: 22, endHour: 6 },
@@ -224,7 +224,7 @@ describe('scheduler — granulacja 1h', () => {
   test('zbyt długa przerwa → valid: false', () => {
     const result = generateSchedule({
       peopleCount: 2,
-      durationDays: 3,
+      totalHours: 24 * 3,
       ...uniformParams(2, 12, 24),
     });
     expect(result.valid).toBe(false);
@@ -236,7 +236,7 @@ describe('scheduler — granulacja 1h', () => {
   test('per-person shift durations: different shift lengths', () => {
     const result = generateSchedule({
       peopleCount: 3,
-      durationDays: 2,
+      totalHours: 24 * 2,
       perPersonShiftHours: [6, 8, 10],
       perPersonMinBreak: [6, 8, 10],
     });

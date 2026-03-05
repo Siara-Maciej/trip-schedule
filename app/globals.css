@@ -18,6 +18,8 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
   --font-sans: system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, monospace;
 }
@@ -40,6 +42,8 @@
   --destructive-foreground: #fafafa;
   --accent: #f4f4f5;
   --accent-foreground: #18181b;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -61,6 +65,8 @@
     --destructive-foreground: #fafafa;
     --accent: #27272a;
     --accent-foreground: #fafafa;
+    --popover: #0a0a0a;
+    --popover-foreground: #fafafa;
   }
 }
 

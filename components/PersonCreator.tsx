@@ -28,7 +28,6 @@ export function PersonCreator({ persons, onChange }: PersonCreatorProps) {
 
   const removePerson = useCallback(
     (index: number) => {
-      if (persons.length <= 2) return;
       onChange(persons.filter((_, i) => i !== index));
     },
     [persons, onChange],
@@ -46,13 +45,20 @@ export function PersonCreator({ persons, onChange }: PersonCreatorProps) {
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
           <CardTitle className="text-lg">Kreator osób</CardTitle>
-          <p className="text-sm text-muted-foreground mt-1">{persons.length} osób</p>
+          {persons.length > 0 && (
+            <p className="text-sm text-muted-foreground mt-1">{persons.length} osób</p>
+          )}
         </div>
         <Button variant="default" size="sm" onClick={addPerson}>
           + Dodaj osobę
         </Button>
       </CardHeader>
       <CardContent>
+        {persons.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-4">
+            Brak osób. Kliknij &quot;+ Dodaj osobę&quot; aby rozpocząć.
+          </p>
+        ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
           {persons.map((person, i) => (
             <div
@@ -71,8 +77,7 @@ export function PersonCreator({ persons, onChange }: PersonCreatorProps) {
                   onChange={(e) => updatePerson(i, { name: e.target.value })}
                   className="h-8 text-sm flex-1"
                 />
-                {persons.length > 2 && (
-                  <button
+                <button
                     type="button"
                     onClick={() => removePerson(i)}
                     className="text-muted-foreground hover:text-destructive transition-colors text-lg leading-none px-1"
@@ -80,7 +85,6 @@ export function PersonCreator({ persons, onChange }: PersonCreatorProps) {
                   >
                     ×
                   </button>
-                )}
               </div>
 
               {/* Długość zmiany */}
@@ -171,6 +175,7 @@ export function PersonCreator({ persons, onChange }: PersonCreatorProps) {
             </div>
           ))}
         </div>
+        )}
       </CardContent>
     </Card>
   );

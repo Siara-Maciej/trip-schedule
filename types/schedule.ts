@@ -59,7 +59,8 @@ export interface PersonConfig {
 
 export interface ScheduleParams {
   peopleCount: number;
-  durationDays: number;
+  /** Total hours to schedule (derived from start/end dates) */
+  totalHours: number;
   names?: string[];
   /** Per-person shift duration; falls back to 8 if missing */
   perPersonShiftHours?: number[];
