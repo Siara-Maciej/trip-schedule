@@ -11,16 +11,18 @@ interface StatsCardsProps {
 
 export function StatsCards({ result, durationDays, hoursPerShift }: StatsCardsProps) {
   const shiftsPerDay = Math.floor(24 / hoursPerShift);
-  const totalExpectedHours = durationDays * shiftsPerDay * hoursPerShift;
-  const totalActualHours = result.stats.reduce((sum, s) => sum + s.totalWorkHours, 0);
-  const coveragePercent = totalExpectedHours > 0
-    ? Math.round((totalActualHours / totalExpectedHours) * 100)
+  const totalBlocks = durationDays * shiftsPerDay;
+  const coveredBlocks = totalBlocks - result.coverageGaps.length;
+  const coveragePercent = totalBlocks > 0
+    ? Math.round((coveredBlocks / totalBlocks) * 100)
     : 0;
 
+  const totalWorkHours = result.stats.reduce((sum, s) => sum + s.totalWorkHours, 0);
+
   const statsItems = [
-    { label: 'Pokrycie', value: `${coveragePercent}%`, color: coveragePercent === 100 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400' },
+    { label: 'Pokrycie bloków', value: `${coveragePercent}%`, color: coveragePercent === 100 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400' },
     { label: 'Osoby', value: `${result.stats.length}` },
-    { label: 'Łącznie godzin', value: `${totalActualHours}h` },
+    { label: 'Łącznie roboczogodzin', value: `${totalWorkHours}h` },
     { label: 'Zmian łącznie', value: `${result.shifts.length}` },
   ];
 

@@ -16,19 +16,17 @@ export function ScheduleTable({ result, durationDays, hoursPerShift }: ScheduleT
     end: (i + 1) * hoursPerShift,
   }));
 
-  // Unikalne osoby
   const persons = result.stats.map((s) => ({
     id: s.personId,
     name: s.personName,
   }));
 
-  // Mapuj zmiany do szybkiego lookup: klucz = `${day}-${startHour}`
-  const shiftMap = new Map<string, typeof result.shifts[0]>();
+  // Mapuj zmiany: klucz = `${personId}-${day}-${startHour}`
+  const shiftSet = new Set<string>();
   for (const shift of result.shifts) {
-    shiftMap.set(`${shift.day}-${shift.startHour}`, shift);
+    shiftSet.add(`${shift.personId}-${shift.day}-${shift.startHour}`);
   }
 
-  // Sprawdź luki
   const gapSet = new Set(
     result.coverageGaps.map((g) => `${g.day}-${g.startHour}`)
   );
@@ -77,12 +75,11 @@ export function ScheduleTable({ result, durationDays, hoursPerShift }: ScheduleT
                   </td>
                   {Array.from({ length: durationDays }, (_, d) =>
                     blocks.map((block) => {
-                      const key = `${d + 1}-${block.start}`;
-                      const shift = shiftMap.get(key);
-                      const isGap = gapSet.has(key);
-                      const isWork = shift?.personId === person.id;
+                      const day = d + 1;
+                      const isWork = shiftSet.has(`${person.id}-${day}-${block.start}`);
+                      const isGap = gapSet.has(`${day}-${block.start}`);
 
-                      let cellClass = 'bg-gray-100 dark:bg-gray-800'; // odpoczynek
+                      let cellClass = 'bg-gray-100 dark:bg-gray-800';
                       let cellContent = '';
 
                       if (isWork) {

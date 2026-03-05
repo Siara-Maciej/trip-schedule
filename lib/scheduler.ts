@@ -1,8 +1,43 @@
 import type { ScheduleParams, ScheduleResult, Shift, PersonStats, TimeGap } from '@/types/schedule';
 
+// Pomocnicza funkcja — przydziel zmianę osobie
+function assignShift(
+  p: number,
+  day: number,
+  blockIdx: number,
+  blocks: { start: number; end: number }[],
+  personNames: string[],
+  shifts: Shift[],
+  allShiftStarts: number[][],
+  allShiftEnds: number[][],
+  lastShiftEnd: number[],
+  workHours: number[],
+  shiftCounts: number[],
+) {
+  const block = blocks[blockIdx];
+  const absoluteStart = (day - 1) * 24 + block.start;
+  const absoluteEnd = (day - 1) * 24 + block.end;
+
+  shifts.push({
+    personId: p,
+    personName: personNames[p],
+    day,
+    startHour: block.start,
+    endHour: block.end,
+    type: 'WORK',
+  });
+
+  allShiftStarts[p].push(absoluteStart);
+  allShiftEnds[p].push(absoluteEnd);
+  lastShiftEnd[p] = absoluteEnd;
+  workHours[p] += blocks[blockIdx].end - blocks[blockIdx].start;
+  shiftCounts[p] += 1;
+}
+
 /**
  * Generuje harmonogram pracy dla grupy osób podczas wielodobowej wycieczki.
  * Każda osoba musi pracować co najmniej jedną zmianę każdego dnia.
+ * W jednym bloku czasowym może pracować wiele osób jednocześnie.
  * Czysta funkcja bez efektów ubocznych.
  */
 export function generateSchedule(params: ScheduleParams): ScheduleResult {
@@ -11,28 +46,16 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
   const errors: string[] = [];
   const coverageGaps: TimeGap[] = [];
 
-  // Generuj nazwy osób
   const personNames = Array.from({ length: peopleCount }, (_, i) =>
     names[i]?.trim() || `Osoba ${i + 1}`
   );
 
-  // Krok 1 — Oblicz ile zmian na dobę
   const shiftsPerDay = Math.floor(24 / hoursPerShift);
-
-  // Sprawdź czy wystarczy zmian na dobę, żeby każda osoba pracowała
-  if (shiftsPerDay < peopleCount) {
-    errors.push(
-      `Za mało zmian na dobę (${shiftsPerDay}) dla ${peopleCount} osób — każda osoba musi pracować codziennie. Skróć długość zmiany lub zmniejsz liczbę osób.`
-    );
-  }
-
-  // Bloki czasowe dla jednej doby
   const blocks = Array.from({ length: shiftsPerDay }, (_, i) => ({
     start: i * hoursPerShift,
     end: (i + 1) * hoursPerShift,
   }));
 
-  // Krok 2 & 3 — Algorytm greedy z wymuszeniem pracy każdej osoby każdego dnia
   const lastShiftEnd: number[] = new Array(peopleCount).fill(-Infinity);
   const workHours: number[] = new Array(peopleCount).fill(0);
   const shiftCounts: number[] = new Array(peopleCount).fill(0);
@@ -40,98 +63,93 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
   const allShiftStarts: number[][] = Array.from({ length: peopleCount }, () => []);
   const shifts: Shift[] = [];
 
-  // Śledź kto pracował danego dnia
-  const workedToday: Set<number>[] = [];
-
   for (let day = 1; day <= durationDays; day++) {
-    const todayWorked = new Set<number>();
-    workedToday.push(todayWorked);
+    // Zbiór obsadzonych bloków w tym dniu
+    const coveredBlocks = new Set<number>();
 
-    // Zbierz dostępność dla każdego bloku
-    const blockAssignments: (number | null)[] = new Array(blocks.length).fill(null);
-
-    // Faza 1: Przydziel osoby które jeszcze nie pracowały dziś (priorytet)
-    // Iteruj bloki i przydzielaj, preferując osoby bez zmiany w tym dniu
-    for (let blockIdx = 0; blockIdx < blocks.length; blockIdx++) {
-      const block = blocks[blockIdx];
-      const absoluteStart = (day - 1) * 24 + block.start;
-
-      // Znajdź dostępne osoby (spełniające minBreakHours)
-      const available: number[] = [];
-      for (let p = 0; p < peopleCount; p++) {
-        const timeSinceLastShift = absoluteStart - lastShiftEnd[p];
-        if (timeSinceLastShift >= minBreakHours) {
-          available.push(p);
+    // Faza 1: Każda osoba dostaje jedną zmianę
+    for (let p = 0; p < peopleCount; p++) {
+      const availableBlocks: number[] = [];
+      for (let blockIdx = 0; blockIdx < blocks.length; blockIdx++) {
+        const absoluteStart = (day - 1) * 24 + blocks[blockIdx].start;
+        if (absoluteStart - lastShiftEnd[p] >= minBreakHours) {
+          availableBlocks.push(blockIdx);
         }
       }
 
-      if (available.length === 0) {
-        coverageGaps.push({ day, startHour: block.start, endHour: block.end });
+      if (availableBlocks.length === 0) {
         errors.push(
-          `Nie można obsadzić dnia ${day}, bloku ${block.start}:00–${block.end}:00 — zwiększ liczbę osób lub skróć wymaganą przerwę`
+          `${personNames[p]} nie może pracować w dniu ${day} — zbyt krótka przerwa od ostatniej zmiany. Skróć zmianę lub wymaganą przerwę.`
         );
         continue;
       }
 
-      // Osoby które jeszcze nie pracowały dziś
-      const notYetWorked = available.filter((p) => !todayWorked.has(p));
-      // Pozostałe bloki do obsadzenia w tym dniu
-      const remainingBlocks = blocks.length - blockIdx;
-      // Ile osób jeszcze musi dostać zmianę dziś
-      const peopleStillNeedWork = peopleCount - todayWorked.size;
+      // Preferuj nieobsadzone bloki, potem mniej obciążone
+      const uncoveredAvailable = availableBlocks.filter((b) => !coveredBlocks.has(b));
 
-      let chosen: number;
-
-      if (notYetWorked.length > 0 && peopleStillNeedWork >= remainingBlocks) {
-        // Musimy priorytetowo dać zmianę komuś kto jeszcze nie pracował
-        // Wybierz osobę z najmniejszą liczbą godzin spośród tych co nie pracowały
-        notYetWorked.sort((a, b) => workHours[a] - workHours[b]);
-        chosen = notYetWorked[0];
-      } else if (notYetWorked.length > 0) {
-        // Preferuj osoby bez zmiany, ale nie jest to krytyczne
-        // Połącz z balansowaniem — wybierz z notYetWorked osobę z min godzin
-        notYetWorked.sort((a, b) => workHours[a] - workHours[b]);
-        // Porównaj z best available
-        available.sort((a, b) => workHours[a] - workHours[b]);
-        // Jeśli osoba z notYetWorked ma zbliżoną liczbę godzin — daj jej priorytet
-        chosen = notYetWorked[0];
+      let chosenBlockIdx: number;
+      if (uncoveredAvailable.length > 0) {
+        // Wybierz nieobsadzony blok z najmniejszą liczbą osób
+        chosenBlockIdx = uncoveredAvailable[0];
       } else {
-        // Wszystkie osoby już pracowały — balansuj normalnie
-        available.sort((a, b) => workHours[a] - workHours[b]);
-        chosen = available[0];
+        // Wszystkie dostępne bloki już obsadzone — wybierz z najmniejszą liczbą osób
+        const blockPersonCounts = new Map<number, number>();
+        for (const s of shifts) {
+          if (s.day === day) {
+            const bIdx = blocks.findIndex((b) => b.start === s.startHour);
+            if (bIdx >= 0) blockPersonCounts.set(bIdx, (blockPersonCounts.get(bIdx) || 0) + 1);
+          }
+        }
+        availableBlocks.sort((a, b) => {
+          const ca = blockPersonCounts.get(a) || 0;
+          const cb = blockPersonCounts.get(b) || 0;
+          return ca - cb;
+        });
+        chosenBlockIdx = availableBlocks[0];
       }
 
-      const absoluteEnd = (day - 1) * 24 + block.end;
-
-      shifts.push({
-        personId: chosen,
-        personName: personNames[chosen],
-        day,
-        startHour: block.start,
-        endHour: block.end,
-        type: 'WORK',
-      });
-
-      blockAssignments[blockIdx] = chosen;
-      todayWorked.add(chosen);
-      allShiftStarts[chosen].push(absoluteStart);
-      allShiftEnds[chosen].push(absoluteEnd);
-      lastShiftEnd[chosen] = absoluteEnd;
-      workHours[chosen] += hoursPerShift;
-      shiftCounts[chosen] += 1;
+      assignShift(p, day, chosenBlockIdx, blocks, personNames, shifts, allShiftStarts, allShiftEnds, lastShiftEnd, workHours, shiftCounts);
+      coveredBlocks.add(chosenBlockIdx);
     }
 
-    // Sprawdź czy każda osoba pracowała dziś
-    for (let p = 0; p < peopleCount; p++) {
-      if (!todayWorked.has(p)) {
-        errors.push(
-          `${personNames[p]} nie ma przydzielonej zmiany w dniu ${day} — za mało zmian na dobę lub zbyt długa przerwa`
-        );
+    // Faza 2: Uzupełnij nieobsadzone bloki (luki w pokryciu)
+    for (let blockIdx = 0; blockIdx < blocks.length; blockIdx++) {
+      if (coveredBlocks.has(blockIdx)) continue;
+
+      // Znajdź osobę która może wziąć ten blok
+      const absoluteStart = (day - 1) * 24 + blocks[blockIdx].start;
+      let bestPerson = -1;
+      let bestWorkHours = Infinity;
+
+      for (let p = 0; p < peopleCount; p++) {
+        if (absoluteStart - lastShiftEnd[p] >= minBreakHours) {
+          if (workHours[p] < bestWorkHours) {
+            bestWorkHours = workHours[p];
+            bestPerson = p;
+          }
+        }
+      }
+
+      if (bestPerson >= 0) {
+        assignShift(bestPerson, day, blockIdx, blocks, personNames, shifts, allShiftStarts, allShiftEnds, lastShiftEnd, workHours, shiftCounts);
+        coveredBlocks.add(blockIdx);
       }
     }
   }
 
-  // Krok 4 — Oblicz statystyki
+  // Sprawdź pokrycie
+  for (let day = 1; day <= durationDays; day++) {
+    for (const block of blocks) {
+      const hasWorker = shifts.some(
+        (s) => s.day === day && s.startHour === block.start && s.endHour === block.end
+      );
+      if (!hasWorker) {
+        coverageGaps.push({ day, startHour: block.start, endHour: block.end });
+      }
+    }
+  }
+
+  // Oblicz statystyki
   const stats: PersonStats[] = personNames.map((name, i) => {
     let minBreak = Infinity;
     const starts = allShiftStarts[i];
@@ -141,9 +159,7 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
       for (let ns = 0; ns < starts.length; ns++) {
         if (starts[ns] > ends[s]) {
           const gap = starts[ns] - ends[s];
-          if (gap < minBreak) {
-            minBreak = gap;
-          }
+          if (gap < minBreak) minBreak = gap;
         }
       }
     }
@@ -157,14 +173,7 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
     };
   });
 
-  // Krok 5 — Walidacja końcowa
   const valid = coverageGaps.length === 0 && errors.length === 0;
 
-  return {
-    shifts,
-    valid,
-    errors,
-    coverageGaps,
-    stats,
-  };
+  return { shifts, valid, errors, coverageGaps, stats };
 }
