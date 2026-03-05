@@ -11,10 +11,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 interface ScheduleFormProps {
   onSubmit: (data: ScheduleFormData) => void;
   defaultValues?: Partial<ScheduleFormData>;
-  onPeopleCountChange?: (count: number) => void;
 }
 
-export function ScheduleForm({ onSubmit, defaultValues, onPeopleCountChange }: ScheduleFormProps) {
+export function ScheduleForm({ onSubmit, defaultValues }: ScheduleFormProps) {
   const {
     register,
     handleSubmit,
@@ -22,10 +21,7 @@ export function ScheduleForm({ onSubmit, defaultValues, onPeopleCountChange }: S
   } = useForm<ScheduleFormData>({
     resolver: zodResolver(scheduleFormSchema),
     defaultValues: {
-      peopleCount: 4,
-      hoursPerShift: 8,
       durationDays: 4,
-      minBreakHours: 11,
       ...defaultValues,
     },
   });
@@ -34,73 +30,22 @@ export function ScheduleForm({ onSubmit, defaultValues, onPeopleCountChange }: S
     <Card>
       <CardHeader>
         <CardTitle className="text-xl">Parametry harmonogramu</CardTitle>
-        <CardDescription>Ustaw parametry wycieczki i zmian roboczych</CardDescription>
+        <CardDescription>Ustaw czas trwania wycieczki</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Liczba osób */}
-            <div className="space-y-2">
-              <Label htmlFor="peopleCount">Liczba osób</Label>
-              <Input
-                id="peopleCount"
-                type="number"
-                min={2}
-                max={20}
-                {...register('peopleCount', {
-                  valueAsNumber: true,
-                  onChange: (e) => onPeopleCountChange?.(Number(e.target.value)),
-                })}
-              />
-              {errors.peopleCount && (
-                <p className="text-sm text-destructive">{errors.peopleCount.message}</p>
-              )}
-            </div>
-
-            {/* Długość zmiany */}
-            <div className="space-y-2">
-              <Label htmlFor="hoursPerShift">Długość zmiany (h)</Label>
-              <Input
-                id="hoursPerShift"
-                type="number"
-                min={4}
-                max={12}
-                {...register('hoursPerShift', { valueAsNumber: true })}
-              />
-              {errors.hoursPerShift && (
-                <p className="text-sm text-destructive">{errors.hoursPerShift.message}</p>
-              )}
-            </div>
-
-            {/* Czas trwania */}
-            <div className="space-y-2">
-              <Label htmlFor="durationDays">Czas trwania (doby)</Label>
-              <Input
-                id="durationDays"
-                type="number"
-                min={1}
-                max={14}
-                {...register('durationDays', { valueAsNumber: true })}
-              />
-              {errors.durationDays && (
-                <p className="text-sm text-destructive">{errors.durationDays.message}</p>
-              )}
-            </div>
-
-            {/* Minimalna przerwa */}
-            <div className="space-y-2">
-              <Label htmlFor="minBreakHours">Min. przerwa (h)</Label>
-              <Input
-                id="minBreakHours"
-                type="number"
-                min={8}
-                max={24}
-                {...register('minBreakHours', { valueAsNumber: true })}
-              />
-              {errors.minBreakHours && (
-                <p className="text-sm text-destructive">{errors.minBreakHours.message}</p>
-              )}
-            </div>
+          <div className="max-w-xs space-y-2">
+            <Label htmlFor="durationDays">Czas trwania (doby)</Label>
+            <Input
+              id="durationDays"
+              type="number"
+              min={1}
+              max={14}
+              {...register('durationDays', { valueAsNumber: true })}
+            />
+            {errors.durationDays && (
+              <p className="text-sm text-destructive">{errors.durationDays.message}</p>
+            )}
           </div>
 
           <Button type="submit" className="w-full sm:w-auto" size="lg">

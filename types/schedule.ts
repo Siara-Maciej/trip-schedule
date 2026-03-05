@@ -51,15 +51,19 @@ export type ScheduleConstraint = NightShiftLimit | PersonBlockedHours;
 
 export interface PersonConfig {
   name: string;
+  hoursPerShift: number;       // długość zmiany w godzinach
+  minBreakHours: number;       // minimalna przerwa w godzinach
   blockedHours: { startHour: number; endHour: number } | null;
   canWorkAtNight: boolean;
 }
 
 export interface ScheduleParams {
   peopleCount: number;
-  hoursPerShift: number;
   durationDays: number;
-  minBreakHours: number;
   names?: string[];
+  /** Per-person shift duration; falls back to 8 if missing */
+  perPersonShiftHours?: number[];
+  /** Per-person min break; falls back to 11 if missing */
+  perPersonMinBreak?: number[];
   constraints?: ScheduleConstraint[];
 }

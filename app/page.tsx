@@ -16,45 +16,83 @@ import type { ScheduleFormData } from '@/lib/validation';
 import type { ScheduleResult, ScheduleConstraint, PersonConfig } from '@/types/schedule';
 
 const STORAGE_KEY = 'schedule-params';
-const CONSTRAINTS_KEY = 'schedule-constraints';
 const PERSONS_KEY = 'schedule-persons';
+const NIGHT_KEY = 'schedule-night';
 
-function getDefaultValues(): Partial<ScheduleFormData> {
-  if (typeof window === 'undefined') return {};
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) return JSON.parse(stored);
-  } catch {
-    // ignoruj
-  }
-  return {};
+interface NightWorkConfig {
+  enabled: boolean;
+  nightStartHour: number;
+  nightEndHour: number;
 }
 
-function getStoredConstraints(): ScheduleConstraint[] {
-  if (typeof window === 'undefined') return [];
+function getStoredDuration(): number {
+  if (typeof window === 'undefined') return 4;
   try {
-    const stored = localStorage.getItem(CONSTRAINTS_KEY);
-    if (stored) return JSON.parse(stored);
-  } catch {
-    // ignoruj
-  }
-  return [];
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return parsed.durationDays ?? 4;
+    }
+  } catch { /* ignoruj */ }
+  return 4;
 }
 
 function getStoredPersons(): PersonConfig[] {
-  if (typeof window === 'undefined') return [];
+  if (typeof window === 'undefined') return getDefaultPersons();
   try {
     const stored = localStorage.getItem(PERSONS_KEY);
-    if (stored) return JSON.parse(stored);
-  } catch {
-    // ignoruj
-  }
-  return [];
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.length >= 2) return parsed;
+    }
+  } catch { /* ignoruj */ }
+  return getDefaultPersons();
 }
 
-/** Konwertuj PersonConfig[] na constrainty schedulera */
-function personsToConstraints(persons: PersonConfig[], nightStart: number, nightEnd: number): ScheduleConstraint[] {
+function getDefaultPersons(): PersonConfig[] {
+  return Array.from({ length: 4 }, () => ({
+    name: '',
+    hoursPerShift: 8,
+    minBreakHours: 11,
+    blockedHours: null,
+    canWorkAtNight: true,
+  }));
+}
+
+function getStoredNight(): NightWorkConfig {
+  if (typeof window === 'undefined') return { enabled: false, nightStartHour: 22, nightEndHour: 6 };
+  try {
+    const stored = localStorage.getItem(NIGHT_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch { /* ignoruj */ }
+  return { enabled: false, nightStartHour: 22, nightEndHour: 6 };
+}
+
+/** Konwertuj PersonConfig[] + nightConfig na constrainty schedulera */
+function buildConstraints(
+  persons: PersonConfig[],
+  nightWork: NightWorkConfig,
+): ScheduleConstraint[] {
   const constraints: ScheduleConstraint[] = [];
+
+  // Night shift limit — gdy włączone, wymagamy max peopleCount (bez limitu), ale osoby z canWorkAtNight=false są blokowane
+  if (nightWork.enabled) {
+    for (let i = 0; i < persons.length; i++) {
+      if (!persons[i].canWorkAtNight) {
+        constraints.push({
+          type: 'personBlocked',
+          personId: i,
+          startHour: nightWork.nightStartHour,
+          endHour: nightWork.nightEndHour,
+        });
+      }
+    }
+  } else {
+    // Brak wymaganej pracy w nocy — blokuj nocne godziny dla wszystkich
+    // (ale nie blokujemy — bo nie mamy domyślnego zakresu)
+  }
+
+  // Per-person blocked hours
   for (let i = 0; i < persons.length; i++) {
     const p = persons[i];
     if (p.blockedHours) {
@@ -65,15 +103,8 @@ function personsToConstraints(persons: PersonConfig[], nightStart: number, night
         endHour: p.blockedHours.endHour,
       });
     }
-    if (!p.canWorkAtNight) {
-      constraints.push({
-        type: 'personBlocked',
-        personId: i,
-        startHour: nightStart,
-        endHour: nightEnd,
-      });
-    }
   }
+
   return constraints;
 }
 
@@ -81,104 +112,65 @@ function SchedulePage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [result, setResult] = useState<ScheduleResult | null>(null);
-  const [params, setParams] = useState<ScheduleFormData | null>(null);
+  const [formData, setFormData] = useState<ScheduleFormData | null>(null);
   const [visible, setVisible] = useState(false);
-  const [constraints, setConstraints] = useState<ScheduleConstraint[]>(getStoredConstraints);
   const [persons, setPersons] = useState<PersonConfig[]>(getStoredPersons);
-  const [currentPeopleCount, setCurrentPeopleCount] = useState(
-    () => getDefaultValues().peopleCount ?? 4
-  );
-
-  // Godziny nocne — z constraintu lub domyślne
-  const nightConstraint = constraints.find((c) => c.type === 'nightShiftLimit');
-  const nightStartHour = nightConstraint?.type === 'nightShiftLimit' ? nightConstraint.nightStartHour : 22;
-  const nightEndHour = nightConstraint?.type === 'nightShiftLimit' ? nightConstraint.nightEndHour : 6;
+  const [nightWork, setNightWork] = useState<NightWorkConfig>(getStoredNight);
 
   const defaultValues: Partial<ScheduleFormData> = (() => {
-    const fromUrl: Partial<ScheduleFormData> = {};
-    const p = searchParams.get('people');
-    const h = searchParams.get('hours');
     const d = searchParams.get('days');
-    const b = searchParams.get('break');
-    if (p) fromUrl.peopleCount = Number(p);
-    if (h) fromUrl.hoursPerShift = Number(h);
-    if (d) fromUrl.durationDays = Number(d);
-    if (b) fromUrl.minBreakHours = Number(b);
-
-    if (Object.keys(fromUrl).length > 0) return fromUrl;
-    return getDefaultValues();
+    if (d) return { durationDays: Number(d) };
+    return { durationDays: getStoredDuration() };
   })();
-
-  const handleConstraintsChange = useCallback((newConstraints: ScheduleConstraint[]) => {
-    setConstraints(newConstraints);
-    try {
-      localStorage.setItem(CONSTRAINTS_KEY, JSON.stringify(newConstraints));
-    } catch {
-      // ignoruj
-    }
-  }, []);
 
   const handlePersonsChange = useCallback((newPersons: PersonConfig[]) => {
     setPersons(newPersons);
-    try {
-      localStorage.setItem(PERSONS_KEY, JSON.stringify(newPersons));
-    } catch {
-      // ignoruj
-    }
+    try { localStorage.setItem(PERSONS_KEY, JSON.stringify(newPersons)); } catch { /* ignoruj */ }
   }, []);
 
-  const handlePeopleCountChange = useCallback((count: number) => {
-    setCurrentPeopleCount(count);
+  const handleNightChange = useCallback((config: NightWorkConfig) => {
+    setNightWork(config);
+    try { localStorage.setItem(NIGHT_KEY, JSON.stringify(config)); } catch { /* ignoruj */ }
   }, []);
 
   const handleSubmit = useCallback((data: ScheduleFormData) => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch {
-      // ignoruj
-    }
+    } catch { /* ignoruj */ }
 
     const urlParams = new URLSearchParams();
-    urlParams.set('people', String(data.peopleCount));
-    urlParams.set('hours', String(data.hoursPerShift));
     urlParams.set('days', String(data.durationDays));
-    urlParams.set('break', String(data.minBreakHours));
     router.replace(`?${urlParams.toString()}`, { scroll: false });
 
-    setCurrentPeopleCount(data.peopleCount);
-
-    // Nazwy z kreatora osób
-    const effectivePersons = persons.slice(0, data.peopleCount);
-    const names = effectivePersons.map((p, i) =>
-      p.name.trim() || `Osoba ${i + 1}`
-    );
-
-    // Constrainty: globalne + z kreatora osób
-    const personConstraints = personsToConstraints(effectivePersons, nightStartHour, nightEndHour);
-    const allConstraints = [...constraints, ...personConstraints];
+    const peopleCount = persons.length;
+    const names = persons.map((p, i) => p.name.trim() || `Osoba ${i + 1}`);
+    const constraints = buildConstraints(persons, nightWork);
 
     const scheduleResult = generateSchedule({
-      peopleCount: data.peopleCount,
-      hoursPerShift: data.hoursPerShift,
+      peopleCount,
       durationDays: data.durationDays,
-      minBreakHours: data.minBreakHours,
       names,
-      constraints: allConstraints,
+      perPersonShiftHours: persons.map((p) => p.hoursPerShift),
+      perPersonMinBreak: persons.map((p) => p.minBreakHours),
+      constraints,
     });
 
     setResult(scheduleResult);
-    setParams(data);
+    setFormData(data);
     setVisible(false);
     requestAnimationFrame(() => setVisible(true));
-  }, [router, constraints, persons, nightStartHour, nightEndHour]);
+  }, [router, persons, nightWork]);
 
   const handleExportCSV = () => {
-    if (!result || !params) return;
-    const csv = generateCSV(result, params.durationDays);
-    downloadCSV(csv, `harmonogram-${params.durationDays}dni.csv`);
+    if (!result || !formData) return;
+    const csv = generateCSV(result, formData.durationDays);
+    downloadCSV(csv, `harmonogram-${formData.durationDays}dni.csv`);
   };
 
-  const effectivePeopleCount = params?.peopleCount ?? defaultValues.peopleCount ?? currentPeopleCount;
+  // Avg shift for display
+  const avgShift = persons.length > 0
+    ? Math.round(persons.reduce((s, p) => s + p.hoursPerShift, 0) / persons.length)
+    : 8;
 
   return (
     <div className="min-h-screen bg-background">
@@ -192,26 +184,13 @@ function SchedulePage() {
           </p>
         </div>
 
-        <ScheduleForm
-          onSubmit={handleSubmit}
-          defaultValues={defaultValues}
-          onPeopleCountChange={handlePeopleCountChange}
-        />
+        <ScheduleForm onSubmit={handleSubmit} defaultValues={defaultValues} />
 
-        <PersonCreator
-          peopleCount={effectivePeopleCount}
-          persons={persons}
-          nightStartHour={nightStartHour}
-          nightEndHour={nightEndHour}
-          onChange={handlePersonsChange}
-        />
+        <PersonCreator persons={persons} onChange={handlePersonsChange} />
 
-        <ConstraintsEditor
-          constraints={constraints}
-          onChange={handleConstraintsChange}
-        />
+        <ConstraintsEditor nightWork={nightWork} onChange={handleNightChange} />
 
-        {result && params && (
+        {result && formData && (
           <div
             className={`space-y-6 transition-opacity duration-500 ${
               visible ? 'opacity-100' : 'opacity-0'
@@ -221,8 +200,8 @@ function SchedulePage() {
 
             <StatsCards
               result={result}
-              durationDays={params.durationDays}
-              hoursPerShift={params.hoursPerShift}
+              durationDays={formData.durationDays}
+              hoursPerShift={avgShift}
             />
 
             <div className="flex justify-end">
@@ -233,14 +212,14 @@ function SchedulePage() {
 
             <ScheduleTable
               result={result}
-              durationDays={params.durationDays}
-              hoursPerShift={params.hoursPerShift}
+              durationDays={formData.durationDays}
+              hoursPerShift={avgShift}
             />
 
             <TimelineView
               result={result}
-              durationDays={params.durationDays}
-              hoursPerShift={params.hoursPerShift}
+              durationDays={formData.durationDays}
+              hoursPerShift={avgShift}
             />
           </div>
         )}
