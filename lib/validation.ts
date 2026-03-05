@@ -33,6 +33,13 @@ export const scheduleFormSchema = z
       message: 'Minimalna przerwa musi być >= długość zmiany',
       path: ['minBreakHours'],
     }
+  )
+  .refine(
+    (data) => Math.floor(24 / data.hoursPerShift) >= data.peopleCount,
+    {
+      message: 'Za mało zmian na dobę — każda osoba musi pracować codziennie. Skróć zmianę lub zmniejsz liczbę osób.',
+      path: ['peopleCount'],
+    }
   );
 
 export type ScheduleFormData = z.infer<typeof scheduleFormSchema>;
