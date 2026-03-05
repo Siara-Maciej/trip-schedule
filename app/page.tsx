@@ -11,6 +11,7 @@ import { PersonCreator } from '@/components/PersonCreator';
 import { Button } from '@/components/ui/button';
 import { generateSchedule } from '@/lib/scheduler';
 import { generateCSV, downloadCSV } from '@/lib/csv-export';
+import { downloadPDF } from '@/lib/pdf-export';
 import type { ScheduleResult, ScheduleConstraint, PersonConfig } from '@/types/schedule';
 
 const PERSONS_KEY = 'schedule-persons';
@@ -80,6 +81,7 @@ function buildConstraints(
 function SchedulePage() {
   const [result, setResult] = useState<ScheduleResult | null>(null);
   const [durationDays, setDurationDays] = useState(0);
+  const [dateRange, setDateRange] = useState<{ start: string; end: string } | null>(null);
   const [visible, setVisible] = useState(false);
   const [persons, setPersons] = useState<PersonConfig[]>(getStoredPersons);
   const [nightWork, setNightWork] = useState<NightWorkConfig>(getStoredNight);
@@ -115,6 +117,10 @@ function SchedulePage() {
 
     setResult(scheduleResult);
     setDurationDays(days);
+    setDateRange({
+      start: data.startDate.toLocaleString('pl-PL'),
+      end: data.endDate.toLocaleString('pl-PL'),
+    });
     setVisible(false);
     requestAnimationFrame(() => setVisible(true));
   }, [persons, nightWork]);
@@ -123,6 +129,20 @@ function SchedulePage() {
     if (!result) return;
     const csv = generateCSV(result, durationDays);
     downloadCSV(csv, `harmonogram-${durationDays}dni.csv`);
+  };
+
+  const handleExportPDF = () => {
+    if (!result) return;
+    downloadPDF(
+      {
+        result,
+        durationDays,
+        persons,
+        startDate: dateRange?.start,
+        endDate: dateRange?.end,
+      },
+      `harmonogram-${durationDays}dni.pdf`,
+    );
   };
 
   const avgShift = persons.length > 0
@@ -161,9 +181,12 @@ function SchedulePage() {
               hoursPerShift={avgShift}
             />
 
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={handleExportCSV}>
                 Pobierz CSV
+              </Button>
+              <Button variant="outline" onClick={handleExportPDF}>
+                Pobierz PDF
               </Button>
             </div>
 

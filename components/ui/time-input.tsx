@@ -1,6 +1,7 @@
 'use client';
 
-import { useRef, useCallback } from 'react';
+import { useCallback } from 'react';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
 interface TimeInputProps {
@@ -11,81 +12,18 @@ interface TimeInputProps {
 }
 
 /**
- * Masked time input (HH:MM). Stores value as "HH:MM" string.
+ * Native time input styled consistently across the app.
+ * Uses <input type="time"> for native browser time picker.
  */
 export function TimeInput({ value, onChange, className, disabled }: TimeInputProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const handleChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      let raw = e.target.value.replace(/[^\d]/g, '');
-
-      // Limit to 4 digits
-      if (raw.length > 4) raw = raw.slice(0, 4);
-
-      // Clamp hours
-      if (raw.length >= 2) {
-        let hh = parseInt(raw.slice(0, 2), 10);
-        if (hh > 23) hh = 23;
-        raw = String(hh).padStart(2, '0') + raw.slice(2);
-      }
-
-      // Clamp minutes
-      if (raw.length >= 4) {
-        let mm = parseInt(raw.slice(2, 4), 10);
-        if (mm > 59) mm = 59;
-        raw = raw.slice(0, 2) + String(mm).padStart(2, '0');
-      }
-
-      // Format with colon
-      let formatted = raw;
-      if (raw.length >= 3) {
-        formatted = raw.slice(0, 2) + ':' + raw.slice(2);
-      }
-
-      onChange(formatted);
-    },
-    [onChange],
-  );
-
-  const handleBlur = useCallback(() => {
-    // Pad on blur
-    let raw = value.replace(/[^\d]/g, '');
-    if (raw.length === 0) {
-      onChange('00:00');
-      return;
-    }
-    if (raw.length <= 2) {
-      let hh = parseInt(raw, 10);
-      if (hh > 23) hh = 23;
-      onChange(String(hh).padStart(2, '0') + ':00');
-      return;
-    }
-    if (raw.length === 3) {
-      raw = raw + '0';
-    }
-    let hh = parseInt(raw.slice(0, 2), 10);
-    let mm = parseInt(raw.slice(2, 4), 10);
-    if (hh > 23) hh = 23;
-    if (mm > 59) mm = 59;
-    onChange(String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0'));
-  }, [value, onChange]);
-
   return (
-    <input
-      ref={inputRef}
-      type="text"
-      inputMode="numeric"
-      placeholder="HH:MM"
+    <Input
+      type="time"
       value={value}
-      onChange={handleChange}
-      onBlur={handleBlur}
+      onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
-      maxLength={5}
       className={cn(
-        'flex h-9 w-20 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors',
-        'placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-        'disabled:cursor-not-allowed disabled:opacity-50 text-center font-mono',
+        'bg-background w-[120px] appearance-none [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none',
         className,
       )}
     />
