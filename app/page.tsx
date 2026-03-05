@@ -7,13 +7,15 @@ import { ScheduleTable } from '@/components/ScheduleTable';
 import { TimelineView } from '@/components/TimelineView';
 import { StatsCards } from '@/components/StatsCards';
 import { CoverageAlert } from '@/components/CoverageAlert';
+import { ConstraintsEditor } from '@/components/ConstraintsEditor';
 import { Button } from '@/components/ui/button';
 import { generateSchedule } from '@/lib/scheduler';
 import { generateCSV, downloadCSV } from '@/lib/csv-export';
 import type { ScheduleFormData } from '@/lib/validation';
-import type { ScheduleResult } from '@/types/schedule';
+import type { ScheduleResult, ScheduleConstraint } from '@/types/schedule';
 
 const STORAGE_KEY = 'schedule-params';
+const CONSTRAINTS_KEY = 'schedule-constraints';
 
 function getDefaultValues(): Partial<ScheduleFormData> {
   if (typeof window === 'undefined') return {};
@@ -21,9 +23,20 @@ function getDefaultValues(): Partial<ScheduleFormData> {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) return JSON.parse(stored);
   } catch {
-    // ignoruj błędy localStorage
+    // ignoruj
   }
   return {};
+}
+
+function getStoredConstraints(): ScheduleConstraint[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const stored = localStorage.getItem(CONSTRAINTS_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch {
+    // ignoruj
+  }
+  return [];
 }
 
 function SchedulePage() {
@@ -32,8 +45,11 @@ function SchedulePage() {
   const [result, setResult] = useState<ScheduleResult | null>(null);
   const [params, setParams] = useState<ScheduleFormData | null>(null);
   const [visible, setVisible] = useState(false);
+  const [constraints, setConstraints] = useState<ScheduleConstraint[]>(getStoredConstraints);
+  // Przechowuj liczbę osób i imiona do wyświetlania w edytorze ograniczeń
+  const [currentPeopleCount, setCurrentPeopleCount] = useState(4);
+  const [currentNames, setCurrentNames] = useState<string[]>([]);
 
-  // Wczytaj parametry z URL lub localStorage
   const defaultValues: Partial<ScheduleFormData> = (() => {
     const fromUrl: Partial<ScheduleFormData> = {};
     const p = searchParams.get('people');
@@ -51,15 +67,22 @@ function SchedulePage() {
     return getDefaultValues();
   })();
 
+  const handleConstraintsChange = useCallback((newConstraints: ScheduleConstraint[]) => {
+    setConstraints(newConstraints);
+    try {
+      localStorage.setItem(CONSTRAINTS_KEY, JSON.stringify(newConstraints));
+    } catch {
+      // ignoruj
+    }
+  }, []);
+
   const handleSubmit = useCallback((data: ScheduleFormData) => {
-    // Zapisz do localStorage
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch {
       // ignoruj
     }
 
-    // Zaktualizuj URL
     const urlParams = new URLSearchParams();
     urlParams.set('people', String(data.peopleCount));
     urlParams.set('hours', String(data.hoursPerShift));
@@ -68,10 +91,12 @@ function SchedulePage() {
     if (data.customNames) urlParams.set('names', data.customNames);
     router.replace(`?${urlParams.toString()}`, { scroll: false });
 
-    // Parsuj imiona
     const names = data.customNames
       ? data.customNames.split(',').map((n) => n.trim()).filter(Boolean)
       : [];
+
+    setCurrentPeopleCount(data.peopleCount);
+    setCurrentNames(names);
 
     const scheduleResult = generateSchedule({
       peopleCount: data.peopleCount,
@@ -79,13 +104,14 @@ function SchedulePage() {
       durationDays: data.durationDays,
       minBreakHours: data.minBreakHours,
       names,
+      constraints,
     });
 
     setResult(scheduleResult);
     setParams(data);
     setVisible(false);
     requestAnimationFrame(() => setVisible(true));
-  }, [router]);
+  }, [router, constraints]);
 
   const handleExportCSV = () => {
     if (!result || !params) return;
@@ -93,10 +119,14 @@ function SchedulePage() {
     downloadCSV(csv, `harmonogram-${params.durationDays}dni.csv`);
   };
 
+  const effectivePeopleCount = params?.peopleCount ?? defaultValues.peopleCount ?? currentPeopleCount;
+  const effectiveNames = currentNames.length > 0
+    ? currentNames
+    : (defaultValues.customNames?.split(',').map((n) => n.trim()).filter(Boolean) ?? []);
+
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-7xl mx-auto px-4 py-8 space-y-8">
-        {/* Nagłówek */}
         <div className="text-center space-y-2">
           <h1 className="text-3xl font-bold tracking-tight">
             Generator Harmonogramu Pracy
@@ -106,10 +136,15 @@ function SchedulePage() {
           </p>
         </div>
 
-        {/* Formularz */}
         <ScheduleForm onSubmit={handleSubmit} defaultValues={defaultValues} />
 
-        {/* Wyniki */}
+        <ConstraintsEditor
+          peopleCount={effectivePeopleCount}
+          personNames={effectiveNames}
+          constraints={constraints}
+          onChange={handleConstraintsChange}
+        />
+
         {result && params && (
           <div
             className={`space-y-6 transition-opacity duration-500 ${

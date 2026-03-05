@@ -166,11 +166,6 @@ describe('scheduler', () => {
   });
 
   test('zbyt długa przerwa uniemożliwia pracę → valid: false', () => {
-    // 2 osoby, 12h zmiana, 3 doby, 24h przerwy
-    // Osoba pracująca dzień 1 nie może pracować dzień 2 (przerwa 12h < 24h)
-    // Ale 2 bloki/dobę → osoba 1: dzień1 0-12, osoba 2: dzień1 12-24
-    // Dzień 2: osoba1 potrzebuje 24h od 12:00 dnia 1 = 12:00 dnia 2 → blok 12-24
-    //          osoba2 potrzebuje 24h od 24:00 dnia 1 = 24:00 dnia 2 → nie może!
     const result = generateSchedule({
       peopleCount: 2,
       hoursPerShift: 12,
@@ -179,5 +174,93 @@ describe('scheduler', () => {
     });
     expect(result.valid).toBe(false);
     expect(result.errors.length).toBeGreaterThan(0);
+  });
+
+  // --- Testy constraintów ---
+
+  test('limit nocny: max 1 osoba w nocy (22-6), 4 osoby, 8h zmiana', () => {
+    const result = generateSchedule({
+      peopleCount: 4,
+      hoursPerShift: 8,
+      durationDays: 2,
+      minBreakHours: 8,
+      constraints: [
+        { type: 'nightShiftLimit', maxPeople: 1, nightStartHour: 22, nightEndHour: 6 },
+      ],
+    });
+
+    // Bloki: 0-8 (nocny), 8-16 (dzienny), 16-24 (nocny)
+    // Max 1 osoba na nocnych blokach
+    for (let day = 1; day <= 2; day++) {
+      const nightShifts = result.shifts.filter(
+        (s) => s.day === day && (s.startHour < 6 || s.startHour >= 22)
+      );
+      // Każdy nocny blok powinien mieć max 1 osobę
+      const nightBlock0 = nightShifts.filter((s) => s.startHour === 0);
+      const nightBlock16 = nightShifts.filter((s) => s.startHour === 16);
+      expect(nightBlock0.length).toBeLessThanOrEqual(1);
+      expect(nightBlock16.length).toBeLessThanOrEqual(1);
+    }
+  });
+
+  test('osoba zablokowana w godzinach 0-8 nie dostaje zmiany 0-8', () => {
+    const result = generateSchedule({
+      peopleCount: 3,
+      hoursPerShift: 8,
+      durationDays: 2,
+      minBreakHours: 8,
+      constraints: [
+        { type: 'personBlocked', personId: 0, startHour: 0, endHour: 8 },
+      ],
+    });
+
+    // Osoba 0 nie powinna mieć żadnej zmiany 0-8
+    const person0Shifts = result.shifts.filter((s) => s.personId === 0);
+    for (const shift of person0Shifts) {
+      expect(shift.startHour).not.toBe(0);
+    }
+  });
+
+  test('osoba zablokowana nocą (22-6) nie dostaje nocnej zmiany', () => {
+    const result = generateSchedule({
+      peopleCount: 4,
+      hoursPerShift: 8,
+      durationDays: 2,
+      minBreakHours: 8,
+      constraints: [
+        { type: 'personBlocked', personId: 1, startHour: 22, endHour: 6 },
+      ],
+    });
+
+    // Osoba 1 nie powinna mieć zmian w bloku 0-8 (pokrywa się z 22-6)
+    const person1Shifts = result.shifts.filter((s) => s.personId === 1);
+    for (const shift of person1Shifts) {
+      expect(shift.startHour).not.toBe(0);
+    }
+  });
+
+  test('kombinacja constraintów: limit nocny + blokada osoby', () => {
+    const result = generateSchedule({
+      peopleCount: 4,
+      hoursPerShift: 8,
+      durationDays: 2,
+      minBreakHours: 8,
+      constraints: [
+        { type: 'nightShiftLimit', maxPeople: 1, nightStartHour: 22, nightEndHour: 6 },
+        { type: 'personBlocked', personId: 0, startHour: 0, endHour: 8 },
+      ],
+    });
+
+    // Osoba 0 nie pracuje 0-8
+    const person0Shifts = result.shifts.filter((s) => s.personId === 0);
+    for (const shift of person0Shifts) {
+      expect(shift.startHour).not.toBe(0);
+    }
+
+    // Max 1 osoba na nocnych blokach
+    for (let day = 1; day <= 2; day++) {
+      const nightBlock0 = result.shifts.filter((s) => s.day === day && s.startHour === 0);
+      expect(nightBlock0.length).toBeLessThanOrEqual(1);
+    }
   });
 });

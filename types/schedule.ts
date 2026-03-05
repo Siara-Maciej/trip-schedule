@@ -31,10 +31,29 @@ export interface TimeGap {
   endHour: number;
 }
 
+// Ograniczenie: maksymalna liczba osób w bloku nocnym
+export interface NightShiftLimit {
+  type: 'nightShiftLimit';
+  maxPeople: number;      // np. 1
+  nightStartHour: number; // np. 22
+  nightEndHour: number;   // np. 6
+}
+
+// Ograniczenie: osoba nie chce pracować w danych godzinach
+export interface PersonBlockedHours {
+  type: 'personBlocked';
+  personId: number;       // 0-based
+  startHour: number;      // np. 22
+  endHour: number;        // np. 6
+}
+
+export type ScheduleConstraint = NightShiftLimit | PersonBlockedHours;
+
 export interface ScheduleParams {
   peopleCount: number;
   hoursPerShift: number;
   durationDays: number;
   minBreakHours: number;
   names?: string[];
+  constraints?: ScheduleConstraint[];
 }
