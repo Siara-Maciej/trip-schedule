@@ -49,6 +49,12 @@ export interface PersonBlockedHours {
 
 export type ScheduleConstraint = NightShiftLimit | PersonBlockedHours;
 
+export interface PersonConfig {
+  name: string;
+  blockedHours: { startHour: number; endHour: number } | null;
+  canWorkAtNight: boolean;
+}
+
 export interface ScheduleParams {
   peopleCount: number;
   hoursPerShift: number;

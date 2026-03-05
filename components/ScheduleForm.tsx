@@ -11,9 +11,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 interface ScheduleFormProps {
   onSubmit: (data: ScheduleFormData) => void;
   defaultValues?: Partial<ScheduleFormData>;
+  onPeopleCountChange?: (count: number) => void;
 }
 
-export function ScheduleForm({ onSubmit, defaultValues }: ScheduleFormProps) {
+export function ScheduleForm({ onSubmit, defaultValues, onPeopleCountChange }: ScheduleFormProps) {
   const {
     register,
     handleSubmit,
@@ -25,7 +26,6 @@ export function ScheduleForm({ onSubmit, defaultValues }: ScheduleFormProps) {
       hoursPerShift: 8,
       durationDays: 4,
       minBreakHours: 11,
-      customNames: '',
       ...defaultValues,
     },
   });
@@ -47,7 +47,10 @@ export function ScheduleForm({ onSubmit, defaultValues }: ScheduleFormProps) {
                 type="number"
                 min={2}
                 max={20}
-                {...register('peopleCount', { valueAsNumber: true })}
+                {...register('peopleCount', {
+                  valueAsNumber: true,
+                  onChange: (e) => onPeopleCountChange?.(Number(e.target.value)),
+                })}
               />
               {errors.peopleCount && (
                 <p className="text-sm text-destructive">{errors.peopleCount.message}</p>
@@ -98,17 +101,6 @@ export function ScheduleForm({ onSubmit, defaultValues }: ScheduleFormProps) {
                 <p className="text-sm text-destructive">{errors.minBreakHours.message}</p>
               )}
             </div>
-          </div>
-
-          {/* Imiona opcjonalne */}
-          <div className="space-y-2">
-            <Label htmlFor="customNames">Imiona osób (opcjonalne, po przecinku)</Label>
-            <Input
-              id="customNames"
-              type="text"
-              placeholder="np. Jan, Anna, Piotr, Maria"
-              {...register('customNames')}
-            />
           </div>
 
           <Button type="submit" className="w-full sm:w-auto" size="lg">

@@ -18,7 +18,6 @@ export const scheduleFormSchema = z
       .number({ error: 'Podaj minimalną przerwę' })
       .min(8, 'Minimalna przerwa to 8 godzin')
       .max(24, 'Maksymalna przerwa to 24 godziny'),
-    customNames: z.string().optional(),
   })
   .refine(
     (data) => data.peopleCount * data.hoursPerShift >= 24,
