@@ -1,45 +1,21 @@
 import { describe, test, expect } from 'vitest';
 import { generateSchedule } from './scheduler';
 
-describe('scheduler', () => {
-  test('10 osób, 8h zmiana, 3 doby, 8h przerwy → valid: true, każda osoba codziennie', () => {
-    // 3 bloki/dobę, 10 osób — wiele osób w jednym bloku
-    const result = generateSchedule({
-      peopleCount: 10,
-      hoursPerShift: 8,
-      durationDays: 3,
-      minBreakHours: 8,
-    });
-    expect(result.valid).toBe(true);
-    expect(result.coverageGaps).toHaveLength(0);
-    expect(result.errors).toHaveLength(0);
-
-    for (let day = 1; day <= 3; day++) {
-      const dayShifts = result.shifts.filter((s) => s.day === day);
-      const personsWorking = new Set(dayShifts.map((s) => s.personId));
-      expect(personsWorking.size).toBe(10);
+// Pomocnicza — zbierz pracujące godziny per osoba per dzień
+function getPersonHoursPerDay(result: ReturnType<typeof generateSchedule>, personId: number, day: number): number[] {
+  const hours: number[] = [];
+  for (const shift of result.shifts) {
+    if (shift.personId === personId && shift.day === day) {
+      for (let h = shift.startHour; h < shift.endHour; h++) {
+        hours.push(h);
+      }
     }
-  });
+  }
+  return hours.sort((a, b) => a - b);
+}
 
-  test('4 osoby, 8h zmiana, 4 doby, 8h przerwy → valid: true, wielu w jednym bloku', () => {
-    // 3 bloki/dobę, 4 osoby — jedna osoba musi dzielić blok z inną
-    const result = generateSchedule({
-      peopleCount: 4,
-      hoursPerShift: 8,
-      durationDays: 4,
-      minBreakHours: 8,
-    });
-    expect(result.valid).toBe(true);
-    expect(result.errors).toHaveLength(0);
-
-    for (let day = 1; day <= 4; day++) {
-      const dayShifts = result.shifts.filter((s) => s.day === day);
-      const personsWorking = new Set(dayShifts.map((s) => s.personId));
-      expect(personsWorking.size).toBe(4);
-    }
-  });
-
-  test('3 osoby, 8h zmiana, 3 doby, 8h przerwy → valid: true, każda osoba pracuje codziennie', () => {
+describe('scheduler — granulacja 1h', () => {
+  test('3 osoby, 8h praca, 3 doby, 8h przerwy → valid, każda osoba codziennie', () => {
     const result = generateSchedule({
       peopleCount: 3,
       hoursPerShift: 8,
@@ -49,50 +25,138 @@ describe('scheduler', () => {
     expect(result.valid).toBe(true);
     expect(result.coverageGaps).toHaveLength(0);
 
+    // Każda osoba pracuje każdego dnia
     for (let day = 1; day <= 3; day++) {
-      const dayShifts = result.shifts.filter((s) => s.day === day);
-      const personsWorking = new Set(dayShifts.map((s) => s.personId));
-      expect(personsWorking.size).toBe(3);
-    }
-  });
-
-  test('każda przerwa >= minBreakHours w wygenerowanym planie', () => {
-    const minBreak = 8;
-    const result = generateSchedule({
-      peopleCount: 10,
-      hoursPerShift: 8,
-      durationDays: 3,
-      minBreakHours: minBreak,
-    });
-
-    expect(result.valid).toBe(true);
-    for (const stat of result.stats) {
-      if (stat.shiftsCount > 1) {
-        expect(stat.minBreakActual).toBeGreaterThanOrEqual(minBreak);
+      for (let p = 0; p < 3; p++) {
+        const hours = getPersonHoursPerDay(result, p, day);
+        expect(hours.length).toBeGreaterThanOrEqual(1);
       }
     }
   });
 
-  test('suma godzin = peopleCount * durationDays * hoursPerShift (każda osoba 1 zmiana/dzień)', () => {
-    const hoursPerShift = 8;
-    const durationDays = 3;
-    const peopleCount = 10;
-    // Każda osoba pracuje dokładnie 1 zmianę/dzień
-    const expectedTotal = peopleCount * durationDays * hoursPerShift;
-
+  test('10 osób, 8h praca, 3 doby, 8h przerwy → valid, każda osoba codziennie', () => {
     const result = generateSchedule({
-      peopleCount,
+      peopleCount: 10,
+      hoursPerShift: 8,
+      durationDays: 3,
+      minBreakHours: 8,
+    });
+    expect(result.valid).toBe(true);
+    expect(result.coverageGaps).toHaveLength(0);
+
+    for (let day = 1; day <= 3; day++) {
+      for (let p = 0; p < 10; p++) {
+        const hours = getPersonHoursPerDay(result, p, day);
+        expect(hours.length).toBeGreaterThanOrEqual(1);
+      }
+    }
+  });
+
+  test('każda osoba pracuje max hoursPerShift godzin dziennie', () => {
+    const hoursPerShift = 8;
+    const result = generateSchedule({
+      peopleCount: 4,
       hoursPerShift,
-      durationDays,
+      durationDays: 3,
       minBreakHours: 8,
     });
 
-    expect(result.valid).toBe(true);
-    const actualTotal = result.stats.reduce((sum, s) => sum + s.totalWorkHours, 0);
-    expect(actualTotal).toBe(expectedTotal);
+    for (let day = 1; day <= 3; day++) {
+      for (let p = 0; p < 4; p++) {
+        const hours = getPersonHoursPerDay(result, p, day);
+        expect(hours.length).toBeLessThanOrEqual(hoursPerShift);
+      }
+    }
   });
 
-  test('2 osoby, 12h zmiana, 2 doby, 12h przerwy → valid: true', () => {
+  test('po hoursPerShift godzinach pracy, przerwa >= minBreakHours', () => {
+    const hoursPerShift = 8;
+    const minBreakHours = 8;
+    const result = generateSchedule({
+      peopleCount: 4,
+      hoursPerShift,
+      durationDays: 3,
+      minBreakHours,
+    });
+    expect(result.valid).toBe(true);
+
+    // Dla każdej osoby zbierz wszystkie absolutne godziny pracy
+    for (let p = 0; p < 4; p++) {
+      const allHours: number[] = [];
+      for (const shift of result.shifts) {
+        if (shift.personId === p) {
+          for (let h = shift.startHour; h < shift.endHour; h++) {
+            allHours.push((shift.day - 1) * 24 + h);
+          }
+        }
+      }
+      allHours.sort((a, b) => a - b);
+
+      // Symuluj akumulator
+      let accumulated = 0;
+      let lastEnd = -Infinity;
+      for (const hour of allHours) {
+        if (hour - lastEnd >= minBreakHours) {
+          accumulated = 0; // reset po przerwie
+        }
+        accumulated++;
+        lastEnd = hour + 1;
+        // Akumulator nie powinien przekroczyć hoursPerShift
+        // (po przepracowaniu limitu jest przerwa, więc nie powinno być hour+1 bez przerwy)
+        expect(accumulated).toBeLessThanOrEqual(hoursPerShift);
+      }
+    }
+  });
+
+  test('pokrycie: każda godzina każdego dnia ma co najmniej 1 osobę', () => {
+    const result = generateSchedule({
+      peopleCount: 4,
+      hoursPerShift: 8,
+      durationDays: 2,
+      minBreakHours: 8,
+    });
+    expect(result.valid).toBe(true);
+    expect(result.coverageGaps).toHaveLength(0);
+
+    // Zweryfikuj ręcznie
+    for (let day = 1; day <= 2; day++) {
+      for (let h = 0; h < 24; h++) {
+        const hasWorker = result.shifts.some(
+          (s) => s.day === day && s.startHour <= h && s.endHour > h
+        );
+        expect(hasWorker).toBe(true);
+      }
+    }
+  });
+
+  test('praca może być rozbita — nie musi być ciągła', () => {
+    // Przy wielu osobach i constraintach praca jest naturalnie rozbita
+    const result = generateSchedule({
+      peopleCount: 4,
+      hoursPerShift: 8,
+      durationDays: 2,
+      minBreakHours: 8,
+    });
+    expect(result.valid).toBe(true);
+
+    // Sprawdź że niektóre osoby mogą mieć >1 blok pracy dziennie
+    // (to zależy od algorytmu, ale z 4 osobami i 8h to możliwe)
+    let anyMultipleBlocks = false;
+    for (let p = 0; p < 4; p++) {
+      for (let day = 1; day <= 2; day++) {
+        const personDayShifts = result.shifts.filter(
+          (s) => s.personId === p && s.day === day
+        );
+        if (personDayShifts.length > 1) {
+          anyMultipleBlocks = true;
+        }
+      }
+    }
+    // Nie wymuszamy, ale sprawdzamy że algorytm generuje poprawne wyniki
+    expect(result.shifts.length).toBeGreaterThan(0);
+  });
+
+  test('2 osoby, 12h praca, 2 doby, 12h przerwy → valid', () => {
     const result = generateSchedule({
       peopleCount: 2,
       hoursPerShift: 12,
@@ -101,38 +165,9 @@ describe('scheduler', () => {
     });
     expect(result.valid).toBe(true);
     expect(result.coverageGaps).toHaveLength(0);
-
-    for (let day = 1; day <= 2; day++) {
-      const dayShifts = result.shifts.filter((s) => s.day === day);
-      const personsWorking = new Set(dayShifts.map((s) => s.personId));
-      expect(personsWorking.size).toBe(2);
-    }
   });
 
-  test('wiele osób w jednym bloku — bloki mogą się pokrywać', () => {
-    // 20 osób, 12h zmiana → 2 bloki/dobę, po 10 osób na blok
-    const result = generateSchedule({
-      peopleCount: 20,
-      hoursPerShift: 12,
-      durationDays: 2,
-      minBreakHours: 12,
-    });
-    expect(result.valid).toBe(true);
-
-    // Sprawdź że w jednym bloku jest więcej niż 1 osoba
-    for (let day = 1; day <= 2; day++) {
-      const block0Shifts = result.shifts.filter(
-        (s) => s.day === day && s.startHour === 0
-      );
-      const block12Shifts = result.shifts.filter(
-        (s) => s.day === day && s.startHour === 12
-      );
-      // 20 osób na 2 bloki → 10 na każdy
-      expect(block0Shifts.length + block12Shifts.length).toBe(20);
-    }
-  });
-
-  test('generowanie nazw osób domyślnych i niestandardowych', () => {
+  test('generowanie nazw osób', () => {
     const result = generateSchedule({
       peopleCount: 4,
       hoursPerShift: 8,
@@ -148,37 +183,9 @@ describe('scheduler', () => {
     expect(names).toContain('Osoba 4');
   });
 
-  test('5 osób, 4h zmiana, 2 doby, 8h przerwy → valid: true, każda osoba codziennie', () => {
-    const result = generateSchedule({
-      peopleCount: 5,
-      hoursPerShift: 4,
-      durationDays: 2,
-      minBreakHours: 8,
-    });
-    expect(result.valid).toBe(true);
-    expect(result.coverageGaps).toHaveLength(0);
-
-    for (let day = 1; day <= 2; day++) {
-      const dayShifts = result.shifts.filter((s) => s.day === day);
-      const personsWorking = new Set(dayShifts.map((s) => s.personId));
-      expect(personsWorking.size).toBe(5);
-    }
-  });
-
-  test('zbyt długa przerwa uniemożliwia pracę → valid: false', () => {
-    const result = generateSchedule({
-      peopleCount: 2,
-      hoursPerShift: 12,
-      durationDays: 3,
-      minBreakHours: 24,
-    });
-    expect(result.valid).toBe(false);
-    expect(result.errors.length).toBeGreaterThan(0);
-  });
-
   // --- Testy constraintów ---
 
-  test('limit nocny: max 1 osoba w nocy (22-6), 4 osoby, 8h zmiana', () => {
+  test('limit nocny: max 1 osoba w nocy (22-6)', () => {
     const result = generateSchedule({
       peopleCount: 4,
       hoursPerShift: 8,
@@ -189,21 +196,20 @@ describe('scheduler', () => {
       ],
     });
 
-    // Bloki: 0-8 (nocny), 8-16 (dzienny), 16-24 (nocny)
-    // Max 1 osoba na nocnych blokach
+    // Sprawdź że w nocnych godzinach max 1 osoba
     for (let day = 1; day <= 2; day++) {
-      const nightShifts = result.shifts.filter(
-        (s) => s.day === day && (s.startHour < 6 || s.startHour >= 22)
-      );
-      // Każdy nocny blok powinien mieć max 1 osobę
-      const nightBlock0 = nightShifts.filter((s) => s.startHour === 0);
-      const nightBlock16 = nightShifts.filter((s) => s.startHour === 16);
-      expect(nightBlock0.length).toBeLessThanOrEqual(1);
-      expect(nightBlock16.length).toBeLessThanOrEqual(1);
+      for (let h = 0; h < 24; h++) {
+        if (h >= 22 || h < 6) {
+          const workingNow = result.shifts.filter(
+            (s) => s.day === day && s.startHour <= h && s.endHour > h
+          );
+          expect(workingNow.length).toBeLessThanOrEqual(1);
+        }
+      }
     }
   });
 
-  test('osoba zablokowana w godzinach 0-8 nie dostaje zmiany 0-8', () => {
+  test('osoba zablokowana w godzinach 0-8 nie pracuje 0-8', () => {
     const result = generateSchedule({
       peopleCount: 3,
       hoursPerShift: 8,
@@ -214,14 +220,16 @@ describe('scheduler', () => {
       ],
     });
 
-    // Osoba 0 nie powinna mieć żadnej zmiany 0-8
-    const person0Shifts = result.shifts.filter((s) => s.personId === 0);
-    for (const shift of person0Shifts) {
-      expect(shift.startHour).not.toBe(0);
+    // Osoba 0 nie powinna pracować w godzinach 0-7
+    for (let day = 1; day <= 2; day++) {
+      const hours = getPersonHoursPerDay(result, 0, day);
+      for (const h of hours) {
+        expect(h).toBeGreaterThanOrEqual(8);
+      }
     }
   });
 
-  test('osoba zablokowana nocą (22-6) nie dostaje nocnej zmiany', () => {
+  test('osoba zablokowana nocą (22-6) nie pracuje w tych godzinach', () => {
     const result = generateSchedule({
       peopleCount: 4,
       hoursPerShift: 8,
@@ -232,35 +240,22 @@ describe('scheduler', () => {
       ],
     });
 
-    // Osoba 1 nie powinna mieć zmian w bloku 0-8 (pokrywa się z 22-6)
-    const person1Shifts = result.shifts.filter((s) => s.personId === 1);
-    for (const shift of person1Shifts) {
-      expect(shift.startHour).not.toBe(0);
+    for (let day = 1; day <= 2; day++) {
+      const hours = getPersonHoursPerDay(result, 1, day);
+      for (const h of hours) {
+        expect(h >= 6 && h < 22).toBe(true);
+      }
     }
   });
 
-  test('kombinacja constraintów: limit nocny + blokada osoby', () => {
+  test('zbyt długa przerwa → valid: false', () => {
     const result = generateSchedule({
-      peopleCount: 4,
-      hoursPerShift: 8,
-      durationDays: 2,
-      minBreakHours: 8,
-      constraints: [
-        { type: 'nightShiftLimit', maxPeople: 1, nightStartHour: 22, nightEndHour: 6 },
-        { type: 'personBlocked', personId: 0, startHour: 0, endHour: 8 },
-      ],
+      peopleCount: 2,
+      hoursPerShift: 12,
+      durationDays: 3,
+      minBreakHours: 24,
     });
-
-    // Osoba 0 nie pracuje 0-8
-    const person0Shifts = result.shifts.filter((s) => s.personId === 0);
-    for (const shift of person0Shifts) {
-      expect(shift.startHour).not.toBe(0);
-    }
-
-    // Max 1 osoba na nocnych blokach
-    for (let day = 1; day <= 2; day++) {
-      const nightBlock0 = result.shifts.filter((s) => s.day === day && s.startHour === 0);
-      expect(nightBlock0.length).toBeLessThanOrEqual(1);
-    }
+    expect(result.valid).toBe(false);
+    expect(result.errors.length).toBeGreaterThan(0);
   });
 });

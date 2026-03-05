@@ -9,27 +9,29 @@ interface ScheduleTableProps {
   hoursPerShift: number;
 }
 
-export function ScheduleTable({ result, durationDays, hoursPerShift }: ScheduleTableProps) {
-  const shiftsPerDay = Math.floor(24 / hoursPerShift);
-  const blocks = Array.from({ length: shiftsPerDay }, (_, i) => ({
-    start: i * hoursPerShift,
-    end: (i + 1) * hoursPerShift,
-  }));
+export function ScheduleTable({ result, durationDays }: ScheduleTableProps) {
+  const hours = Array.from({ length: 24 }, (_, i) => i);
 
   const persons = result.stats.map((s) => ({
     id: s.personId,
     name: s.personName,
   }));
 
-  // Mapuj zmiany: klucz = `${personId}-${day}-${startHour}`
-  const shiftSet = new Set<string>();
+  // Zbuduj Set pracujących godzin per osoba: `${personId}-${day}-${hour}`
+  const workSet = new Set<string>();
   for (const shift of result.shifts) {
-    shiftSet.add(`${shift.personId}-${shift.day}-${shift.startHour}`);
+    for (let h = shift.startHour; h < shift.endHour; h++) {
+      workSet.add(`${shift.personId}-${shift.day}-${h}`);
+    }
   }
 
-  const gapSet = new Set(
-    result.coverageGaps.map((g) => `${g.day}-${g.startHour}`)
-  );
+  // Luki pokrycia
+  const gapSet = new Set<string>();
+  for (const g of result.coverageGaps) {
+    for (let h = g.startHour; h < g.endHour; h++) {
+      gapSet.add(`${g.day}-${h}`);
+    }
+  }
 
   return (
     <Card>
@@ -38,17 +40,17 @@ export function ScheduleTable({ result, durationDays, hoursPerShift }: ScheduleT
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
+          <table className="border-collapse text-xs">
             <thead>
               <tr>
-                <th className="border border-border p-2 bg-muted text-left sticky left-0 z-10" rowSpan={2}>
+                <th className="border border-border p-1 bg-muted text-left sticky left-0 z-10 min-w-[80px]" rowSpan={2}>
                   Osoba
                 </th>
                 {Array.from({ length: durationDays }, (_, d) => (
                   <th
                     key={d}
-                    className="border border-border p-2 bg-muted text-center"
-                    colSpan={shiftsPerDay}
+                    className="border border-border p-1 bg-muted text-center"
+                    colSpan={24}
                   >
                     Dzień {d + 1}
                   </th>
@@ -56,12 +58,12 @@ export function ScheduleTable({ result, durationDays, hoursPerShift }: ScheduleT
               </tr>
               <tr>
                 {Array.from({ length: durationDays }, (_, d) =>
-                  blocks.map((block) => (
+                  hours.map((h) => (
                     <th
-                      key={`${d}-${block.start}`}
-                      className="border border-border p-1 bg-muted/50 text-center text-xs font-normal"
+                      key={`${d}-${h}`}
+                      className="border border-border px-0 py-0.5 bg-muted/50 text-center font-normal w-5 min-w-5"
                     >
-                      {block.start}:00–{block.end}:00
+                      {h}
                     </th>
                   ))
                 )}
@@ -70,33 +72,34 @@ export function ScheduleTable({ result, durationDays, hoursPerShift }: ScheduleT
             <tbody>
               {persons.map((person) => (
                 <tr key={person.id}>
-                  <td className="border border-border p-2 font-medium sticky left-0 bg-background z-10 whitespace-nowrap">
+                  <td className="border border-border p-1 font-medium sticky left-0 bg-background z-10 whitespace-nowrap">
                     {person.name}
                   </td>
                   {Array.from({ length: durationDays }, (_, d) =>
-                    blocks.map((block) => {
+                    hours.map((h) => {
                       const day = d + 1;
-                      const isWork = shiftSet.has(`${person.id}-${day}-${block.start}`);
-                      const isGap = gapSet.has(`${day}-${block.start}`);
+                      const isWork = workSet.has(`${person.id}-${day}-${h}`);
+                      const isGap = gapSet.has(`${day}-${h}`);
 
                       let cellClass = 'bg-gray-100 dark:bg-gray-800';
-                      let cellContent = '';
-
                       if (isWork) {
-                        cellClass = 'bg-green-200 dark:bg-green-900 text-green-800 dark:text-green-200';
-                        cellContent = `${block.start}:00–${block.end}:00`;
+                        cellClass = 'bg-green-300 dark:bg-green-800';
                       } else if (isGap) {
-                        cellClass = 'bg-red-200 dark:bg-red-900 text-red-800 dark:text-red-200';
-                        cellContent = 'LUKA';
+                        cellClass = 'bg-red-300 dark:bg-red-800';
                       }
 
                       return (
                         <td
-                          key={`${d}-${block.start}`}
-                          className={`border border-border p-1 text-center text-xs ${cellClass}`}
-                        >
-                          {cellContent}
-                        </td>
+                          key={`${d}-${h}`}
+                          className={`border border-border p-0 w-5 min-w-5 h-5 ${cellClass}`}
+                          title={
+                            isWork
+                              ? `${person.name}: ${h}:00–${h + 1}:00`
+                              : isGap
+                                ? `LUKA: ${h}:00–${h + 1}:00`
+                                : ''
+                          }
+                        />
                       );
                     })
                   )}
@@ -104,6 +107,19 @@ export function ScheduleTable({ result, durationDays, hoursPerShift }: ScheduleT
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* Legenda */}
+        <div className="flex gap-4 mt-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-3 h-3 bg-green-300 dark:bg-green-800 rounded-sm" /> Praca
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-3 h-3 bg-gray-100 dark:bg-gray-800 rounded-sm border border-border" /> Odpoczynek
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-3 h-3 bg-red-300 dark:bg-red-800 rounded-sm" /> Luka
+          </span>
         </div>
 
         {/* Tabela statystyk per osoba */}
@@ -114,7 +130,7 @@ export function ScheduleTable({ result, durationDays, hoursPerShift }: ScheduleT
               <thead>
                 <tr>
                   <th className="border border-border p-2 bg-muted text-left">Osoba</th>
-                  <th className="border border-border p-2 bg-muted text-center">Zmian</th>
+                  <th className="border border-border p-2 bg-muted text-center">Bloków pracy</th>
                   <th className="border border-border p-2 bg-muted text-center">Łącznie godzin</th>
                   <th className="border border-border p-2 bg-muted text-center">Min. przerwa</th>
                 </tr>

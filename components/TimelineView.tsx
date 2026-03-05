@@ -9,7 +9,6 @@ interface TimelineViewProps {
   hoursPerShift: number;
 }
 
-// Paleta kolorów dla osób
 const PERSON_COLORS = [
   { bg: 'bg-blue-400 dark:bg-blue-600', text: 'text-white' },
   { bg: 'bg-emerald-400 dark:bg-emerald-600', text: 'text-white' },
@@ -23,8 +22,8 @@ const PERSON_COLORS = [
   { bg: 'bg-teal-400 dark:bg-teal-600', text: 'text-white' },
 ];
 
-export function TimelineView({ result, durationDays, hoursPerShift }: TimelineViewProps) {
-  const hours = Array.from({ length: 25 }, (_, i) => i); // 0-24
+export function TimelineView({ result, durationDays }: TimelineViewProps) {
+  const personIds = result.stats.map((s) => s.personId);
 
   return (
     <Card>
@@ -32,43 +31,45 @@ export function TimelineView({ result, durationDays, hoursPerShift }: TimelineVi
         <CardTitle className="text-xl">Oś czasu</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="space-y-4">
+        <div className="space-y-6">
           {Array.from({ length: durationDays }, (_, dayIdx) => {
             const day = dayIdx + 1;
             const dayShifts = result.shifts.filter((s) => s.day === day);
 
             return (
               <div key={day}>
-                <p className="text-sm font-medium mb-1">Dzień {day}</p>
-                <div className="relative h-10 bg-gray-100 dark:bg-gray-800 rounded overflow-hidden">
-                  {/* Linie godzinowe */}
-                  {hours.map((h) => (
-                    <div
-                      key={h}
-                      className="absolute top-0 bottom-0 border-l border-gray-300 dark:border-gray-600"
-                      style={{ left: `${(h / 24) * 100}%` }}
-                    />
-                  ))}
-                  {/* Bloki zmian */}
-                  {dayShifts.map((shift, i) => {
-                    const color = PERSON_COLORS[shift.personId % PERSON_COLORS.length];
-                    const left = (shift.startHour / 24) * 100;
-                    const width = ((shift.endHour - shift.startHour) / 24) * 100;
+                <p className="text-sm font-medium mb-2">Dzień {day}</p>
+                <div className="space-y-1">
+                  {personIds.map((pid) => {
+                    const personShifts = dayShifts.filter((s) => s.personId === pid);
+                    const color = PERSON_COLORS[pid % PERSON_COLORS.length];
+                    const name = result.stats.find((s) => s.personId === pid)?.personName ?? '';
 
                     return (
-                      <div
-                        key={i}
-                        className={`absolute top-0.5 bottom-0.5 rounded-sm flex items-center justify-center text-xs font-medium ${color.bg} ${color.text} transition-all`}
-                        style={{ left: `${left}%`, width: `${width}%` }}
-                        title={`${shift.personName}: ${shift.startHour}:00–${shift.endHour}:00`}
-                      >
-                        <span className="truncate px-1">{shift.personName}</span>
+                      <div key={pid} className="flex items-center gap-2">
+                        <span className="text-[10px] w-14 truncate text-right text-muted-foreground">
+                          {name}
+                        </span>
+                        <div className="relative h-5 flex-1 bg-gray-100 dark:bg-gray-800 rounded-sm overflow-hidden">
+                          {personShifts.map((shift, i) => {
+                            const left = (shift.startHour / 24) * 100;
+                            const width = ((shift.endHour - shift.startHour) / 24) * 100;
+                            return (
+                              <div
+                                key={i}
+                                className={`absolute top-0 bottom-0 rounded-sm ${color.bg} ${color.text}`}
+                                style={{ left: `${left}%`, width: `${width}%` }}
+                                title={`${name}: ${shift.startHour}:00–${shift.endHour}:00`}
+                              />
+                            );
+                          })}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
                 {/* Etykiety godzin */}
-                <div className="relative h-4 text-[10px] text-muted-foreground">
+                <div className="relative h-4 ml-16 text-[10px] text-muted-foreground">
                   {[0, 6, 12, 18, 24].map((h) => (
                     <span
                       key={h}

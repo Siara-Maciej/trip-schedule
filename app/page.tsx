@@ -115,7 +115,7 @@ function SchedulePage() {
 
   const handleExportCSV = () => {
     if (!result || !params) return;
-    const csv = generateCSV(result, params.durationDays, params.hoursPerShift);
+    const csv = generateCSV(result, params.durationDays);
     downloadCSV(csv, `harmonogram-${params.durationDays}dni.csv`);
   };
 

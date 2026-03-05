@@ -1,33 +1,26 @@
 import type {
   ScheduleParams, ScheduleResult, Shift, PersonStats, TimeGap,
-  NightShiftLimit, PersonBlockedHours, ScheduleConstraint,
+  NightShiftLimit, ScheduleConstraint,
 } from '@/types/schedule';
 
-// Sprawdź czy blok [blockStart, blockEnd) nakłada się z zakresem [rangeStart, rangeEnd)
-// Obsługuje zakresy przechodzące przez północ (np. 22-6)
-function blockOverlapsRange(blockStart: number, blockEnd: number, rangeStart: number, rangeEnd: number): boolean {
+// Sprawdź czy godzina mieści się w zakresie (obsługuje przejście przez północ)
+function isHourInRange(hour: number, rangeStart: number, rangeEnd: number): boolean {
   if (rangeStart < rangeEnd) {
-    // Zwykły zakres (np. 8-16)
-    return blockStart < rangeEnd && blockEnd > rangeStart;
+    return hour >= rangeStart && hour < rangeEnd;
   }
-  // Zakres przechodzący przez północ (np. 22-6) = [rangeStart, 24) + [0, rangeEnd)
-  // Blok nakłada się z [rangeStart, 24)
-  const overlapsEvening = blockStart < 24 && blockEnd > rangeStart;
-  // Blok nakłada się z [0, rangeEnd)
-  const overlapsMorning = blockStart < rangeEnd && blockEnd > 0;
-  return overlapsEvening || overlapsMorning;
+  // Zakres przez północ (np. 22-6)
+  return hour >= rangeStart || hour < rangeEnd;
 }
 
-// Sprawdź czy osoba jest zablokowana dla danego bloku przez constrainty
-function isPersonBlockedForBlock(
+// Sprawdź czy osoba jest zablokowana dla danej godziny
+function isPersonBlockedForHour(
   personId: number,
-  blockStart: number,
-  blockEnd: number,
+  hour: number,
   constraints: ScheduleConstraint[],
 ): boolean {
   for (const c of constraints) {
     if (c.type === 'personBlocked' && c.personId === personId) {
-      if (blockOverlapsRange(blockStart, blockEnd, c.startHour, c.endHour)) {
+      if (isHourInRange(hour, c.startHour, c.endHour)) {
         return true;
       }
     }
@@ -35,68 +28,58 @@ function isPersonBlockedForBlock(
   return false;
 }
 
-// Sprawdź czy blok jest nocny wg constraintów
-function isNightBlock(
-  blockStart: number,
-  blockEnd: number,
-  nightConstraint: NightShiftLimit,
-): boolean {
-  return blockOverlapsRange(blockStart, blockEnd, nightConstraint.nightStartHour, nightConstraint.nightEndHour);
-}
+// Łączy posortowaną listę godzin w ciągłe bloki (Shift)
+function mergeHoursIntoShifts(
+  personId: number,
+  personName: string,
+  hours: number[], // absolutne godziny, posortowane rosnąco
+): Shift[] {
+  if (hours.length === 0) return [];
+  const shifts: Shift[] = [];
 
-// Zlicz ile osób jest już przydzielonych do nocnego bloku danego dnia
-function countNightAssignments(
-  shifts: Shift[],
-  day: number,
-  blockStart: number,
-  blockEnd: number,
-  nightConstraint: NightShiftLimit,
-): number {
-  if (!isNightBlock(blockStart, blockEnd, nightConstraint)) return 0;
-  return shifts.filter(
-    (s) => s.day === day && isNightBlock(s.startHour, s.endHour, nightConstraint)
-  ).length;
-}
+  let blockStart = hours[0];
+  let blockEnd = hours[0] + 1;
 
-// Pomocnicza — przydziel zmianę
-function assignShift(
-  p: number,
-  day: number,
-  blockIdx: number,
-  blocks: { start: number; end: number }[],
-  personNames: string[],
-  shifts: Shift[],
-  allShiftStarts: number[][],
-  allShiftEnds: number[][],
-  lastShiftEnd: number[],
-  workHours: number[],
-  shiftCounts: number[],
-) {
-  const block = blocks[blockIdx];
-  const absoluteStart = (day - 1) * 24 + block.start;
-  const absoluteEnd = (day - 1) * 24 + block.end;
+  for (let i = 1; i < hours.length; i++) {
+    if (hours[i] === blockEnd) {
+      // Kontynuacja ciągłego bloku
+      blockEnd = hours[i] + 1;
+    } else {
+      // Przerwa — zamknij bieżący blok
+      const day = Math.floor(blockStart / 24) + 1;
+      shifts.push({
+        personId,
+        personName,
+        day,
+        startHour: blockStart % 24,
+        endHour: blockEnd % 24 || 24,
+        type: 'WORK',
+      });
+      blockStart = hours[i];
+      blockEnd = hours[i] + 1;
+    }
+  }
 
+  // Ostatni blok
+  const day = Math.floor(blockStart / 24) + 1;
   shifts.push({
-    personId: p,
-    personName: personNames[p],
+    personId,
+    personName,
     day,
-    startHour: block.start,
-    endHour: block.end,
+    startHour: blockStart % 24,
+    endHour: blockEnd % 24 || 24,
     type: 'WORK',
   });
 
-  allShiftStarts[p].push(absoluteStart);
-  allShiftEnds[p].push(absoluteEnd);
-  lastShiftEnd[p] = absoluteEnd;
-  workHours[p] += block.end - block.start;
-  shiftCounts[p] += 1;
+  return shifts;
 }
 
 /**
- * Generuje harmonogram pracy dla grupy osób podczas wielodobowej wycieczki.
- * Każda osoba musi pracować co najmniej jedną zmianę każdego dnia.
- * W jednym bloku czasowym może pracować wiele osób jednocześnie.
- * Respektuje ograniczenia: limit osób w nocy, zablokowane godziny dla osób.
+ * Generuje harmonogram pracy z granulacją 1-godzinną.
+ * Praca może być rozbita w ciągu dnia — nie musi być ciągła.
+ * Po przepracowaniu hoursPerShift godzin wymagana jest przerwa minBreakHours.
+ * Każda osoba musi pracować co najmniej 1 godzinę każdego dnia.
+ * W jednej godzinie może pracować wiele osób jednocześnie.
  */
 export function generateSchedule(params: ScheduleParams): ScheduleResult {
   const { peopleCount, hoursPerShift, durationDays, minBreakHours, names = [], constraints = [] } = params;
@@ -108,141 +91,200 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
     names[i]?.trim() || `Osoba ${i + 1}`
   );
 
-  const shiftsPerDay = Math.floor(24 / hoursPerShift);
-  const blocks = Array.from({ length: shiftsPerDay }, (_, i) => ({
-    start: i * hoursPerShift,
-    end: (i + 1) * hoursPerShift,
-  }));
-
-  // Wyciągnij constraint nocny (może być max 1)
+  // Constraint nocny
   const nightConstraint = constraints.find((c): c is NightShiftLimit => c.type === 'nightShiftLimit') ?? null;
 
-  const lastShiftEnd: number[] = new Array(peopleCount).fill(-Infinity);
-  const workHours: number[] = new Array(peopleCount).fill(0);
-  const shiftCounts: number[] = new Array(peopleCount).fill(0);
-  const allShiftEnds: number[][] = Array.from({ length: peopleCount }, () => []);
-  const allShiftStarts: number[][] = Array.from({ length: peopleCount }, () => []);
-  const shifts: Shift[] = [];
+  // Stan per osoba
+  const hoursWorkedSinceBreak: number[] = new Array(peopleCount).fill(0);
+  const lastWorkEnd: number[] = new Array(peopleCount).fill(-Infinity); // absolutna godzina końca ostatniej pracy
+  const totalWorkHours: number[] = new Array(peopleCount).fill(0);
 
-  // Sprawdź czy osoba może wziąć blok (przerwa + constrainty)
-  function canPersonTakeBlock(p: number, day: number, blockIdx: number): boolean {
-    const block = blocks[blockIdx];
-    const absoluteStart = (day - 1) * 24 + block.start;
+  // Wszystkie przydzielone godziny per osoba (absolutne)
+  const workHoursByPerson: number[][] = Array.from({ length: peopleCount }, () => []);
+  // Szybki lookup: absoluteHour → Set<personId>
+  const hourAssignments = new Map<number, Set<number>>();
 
-    // Sprawdź minimalną przerwę
-    if (absoluteStart - lastShiftEnd[p] < minBreakHours) return false;
+  function canPersonWorkHour(p: number, absoluteHour: number, hoursWorkedToday: number): boolean {
+    const hour = absoluteHour % 24;
 
-    // Sprawdź blokadę osoby
-    if (isPersonBlockedForBlock(p, block.start, block.end, constraints)) return false;
+    // Osoba już przepracowała hoursPerShift dziś — nie przydzielaj więcej
+    if (hoursWorkedToday >= hoursPerShift) return false;
 
-    // Sprawdź limit nocny
-    if (nightConstraint && isNightBlock(block.start, block.end, nightConstraint)) {
-      const currentNightCount = countNightAssignments(shifts, day, block.start, block.end, nightConstraint);
-      if (currentNightCount >= nightConstraint.maxPeople) return false;
+    // Blokada osoby
+    if (isPersonBlockedForHour(p, hour, constraints)) return false;
+
+    // Sprawdź akumulator przerw
+    if (lastWorkEnd[p] !== -Infinity) {
+      const gap = absoluteHour - lastWorkEnd[p];
+
+      if (gap >= minBreakHours) {
+        // Naturalna przerwa — akumulator zresetuje się przy przydziale
+      } else if (hoursWorkedSinceBreak[p] >= hoursPerShift) {
+        // Obowiązkowa przerwa po przepracowaniu limitu — jeszcze trwa
+        return false;
+      }
+      // Jeśli akumulator < limit i gap < minBreakHours — OK, może dalej pracować
+    }
+
+    // Limit nocny
+    if (nightConstraint && isHourInRange(hour, nightConstraint.nightStartHour, nightConstraint.nightEndHour)) {
+      const assigned = hourAssignments.get(absoluteHour);
+      const nightCount = assigned
+        ? [...assigned].filter((pid) => pid !== p).length // nie licz samego siebie jeśli już tam jest
+        : 0;
+      // Zlicz ile osób jest przydzielonych do NOCNYCH godzin w tej samej godzinie
+      const currentNightPeople = assigned ? assigned.size : 0;
+      if (currentNightPeople >= nightConstraint.maxPeople) return false;
     }
 
     return true;
   }
 
-  for (let day = 1; day <= durationDays; day++) {
-    const coveredBlocks = new Set<number>();
+  function assignWork(p: number, absoluteHour: number) {
+    // Resetuj akumulator jeśli naturalna przerwa
+    if (lastWorkEnd[p] !== -Infinity) {
+      const gap = absoluteHour - lastWorkEnd[p];
+      if (gap >= minBreakHours) {
+        hoursWorkedSinceBreak[p] = 0;
+      }
+    } else {
+      hoursWorkedSinceBreak[p] = 0;
+    }
 
-    // Faza 1: Każda osoba dostaje jedną zmianę
-    for (let p = 0; p < peopleCount; p++) {
-      const availableBlocks: number[] = [];
-      for (let blockIdx = 0; blockIdx < blocks.length; blockIdx++) {
-        if (canPersonTakeBlock(p, day, blockIdx)) {
-          availableBlocks.push(blockIdx);
+    hoursWorkedSinceBreak[p]++;
+    lastWorkEnd[p] = absoluteHour + 1; // praca trwa od absoluteHour do absoluteHour+1
+    totalWorkHours[p]++;
+    workHoursByPerson[p].push(absoluteHour);
+
+    if (!hourAssignments.has(absoluteHour)) {
+      hourAssignments.set(absoluteHour, new Set());
+    }
+    hourAssignments.get(absoluteHour)!.add(p);
+  }
+
+  for (let day = 1; day <= durationDays; day++) {
+    const hoursWorkedToday: number[] = new Array(peopleCount).fill(0);
+    const workedToday: boolean[] = new Array(peopleCount).fill(false);
+
+    for (let hour = 0; hour < 24; hour++) {
+      const absoluteHour = (day - 1) * 24 + hour;
+
+      // Znajdź dostępne osoby
+      const available: number[] = [];
+      for (let p = 0; p < peopleCount; p++) {
+        if (canPersonWorkHour(p, absoluteHour, hoursWorkedToday[p])) {
+          available.push(p);
         }
       }
 
-      if (availableBlocks.length === 0) {
-        errors.push(
-          `${personNames[p]} nie może pracować w dniu ${day} — brak dostępnych bloków (przerwa/ograniczenia). Skróć zmianę, przerwę lub zmień ograniczenia.`
-        );
+      // Ile osób powinno pracować tę godzinę?
+      // Cel: każda osoba pracuje hoursPerShift godzin/dzień
+      let remainingPersonHours = 0;
+      for (let p = 0; p < peopleCount; p++) {
+        remainingPersonHours += Math.max(0, hoursPerShift - hoursWorkedToday[p]);
+      }
+      const remainingDayHours = 24 - hour;
+      const targetThisHour = Math.max(1, Math.ceil(remainingPersonHours / remainingDayHours));
+
+      if (available.length === 0) {
+        // Sprawdź czy ktokolwiek już pracuje tę godzinę
+        const assigned = hourAssignments.get(absoluteHour);
+        if (!assigned || assigned.size === 0) {
+          coverageGaps.push({ day, startHour: hour, endHour: hour + 1 });
+        }
         continue;
       }
 
-      // Preferuj nieobsadzone bloki
-      const uncoveredAvailable = availableBlocks.filter((b) => !coveredBlocks.has(b));
+      // Sortuj: priorytet dla kontynuacji bloku, potem ci co nie pracowali dziś, potem najmniej godzin
+      available.sort((a, b) => {
+        // Preferuj osobę aktualnie w bloku (pracowała poprzednią godzinę)
+        const aInBlock = lastWorkEnd[a] === absoluteHour;
+        const bInBlock = lastWorkEnd[b] === absoluteHour;
+        if (aInBlock !== bInBlock) return aInBlock ? -1 : 1;
 
-      let chosenBlockIdx: number;
-      if (uncoveredAvailable.length > 0) {
-        chosenBlockIdx = uncoveredAvailable[0];
-      } else {
-        // Wybierz blok z najmniejszą liczbą osób
-        const blockPersonCounts = new Map<number, number>();
-        for (const s of shifts) {
-          if (s.day === day) {
-            const bIdx = blocks.findIndex((b) => b.start === s.startHour);
-            if (bIdx >= 0) blockPersonCounts.set(bIdx, (blockPersonCounts.get(bIdx) || 0) + 1);
-          }
+        // Potem ci co jeszcze nie pracowali dziś
+        if (workedToday[a] !== workedToday[b]) return workedToday[a] ? 1 : -1;
+
+        // Potem wg najmniej godzin dziś
+        if (hoursWorkedToday[a] !== hoursWorkedToday[b]) return hoursWorkedToday[a] - hoursWorkedToday[b];
+
+        // Tiebreak: najmniej godzin łącznie
+        return totalWorkHours[a] - totalWorkHours[b];
+      });
+
+      const toAssign = Math.min(targetThisHour, available.length);
+      for (let i = 0; i < toAssign; i++) {
+        const p = available[i];
+
+        // Re-sprawdź limit nocny po wcześniejszych przydziałach w tej godzinie
+        const hourMod = absoluteHour % 24;
+        if (nightConstraint && isHourInRange(hourMod, nightConstraint.nightStartHour, nightConstraint.nightEndHour)) {
+          const assigned = hourAssignments.get(absoluteHour);
+          if (assigned && assigned.size >= nightConstraint.maxPeople) break;
         }
-        availableBlocks.sort((a, b) => {
-          const ca = blockPersonCounts.get(a) || 0;
-          const cb = blockPersonCounts.get(b) || 0;
-          return ca - cb;
-        });
-        chosenBlockIdx = availableBlocks[0];
-      }
 
-      assignShift(p, day, chosenBlockIdx, blocks, personNames, shifts, allShiftStarts, allShiftEnds, lastShiftEnd, workHours, shiftCounts);
-      coveredBlocks.add(chosenBlockIdx);
+        assignWork(p, absoluteHour);
+        hoursWorkedToday[p]++;
+        workedToday[p] = true;
+      }
     }
 
-    // Faza 2: Uzupełnij nieobsadzone bloki
-    for (let blockIdx = 0; blockIdx < blocks.length; blockIdx++) {
-      if (coveredBlocks.has(blockIdx)) continue;
-
-      let bestPerson = -1;
-      let bestWorkHours = Infinity;
-
-      for (let p = 0; p < peopleCount; p++) {
-        if (canPersonTakeBlock(p, day, blockIdx) && workHours[p] < bestWorkHours) {
-          bestWorkHours = workHours[p];
-          bestPerson = p;
-        }
-      }
-
-      if (bestPerson >= 0) {
-        assignShift(bestPerson, day, blockIdx, blocks, personNames, shifts, allShiftStarts, allShiftEnds, lastShiftEnd, workHours, shiftCounts);
-        coveredBlocks.add(blockIdx);
+    // Sprawdź czy każda osoba pracowała dziś
+    for (let p = 0; p < peopleCount; p++) {
+      if (!workedToday[p]) {
+        errors.push(
+          `${personNames[p]} nie ma przydzielonej pracy w dniu ${day} — brak dostępnych godzin (przerwa/ograniczenia).`
+        );
       }
     }
   }
 
-  // Sprawdź pokrycie
+  // Sprawdź pokrycie — każda godzina każdego dnia musi mieć co najmniej 1 osobę
   for (let day = 1; day <= durationDays; day++) {
-    for (const block of blocks) {
-      const hasWorker = shifts.some(
-        (s) => s.day === day && s.startHour === block.start && s.endHour === block.end
-      );
-      if (!hasWorker) {
-        coverageGaps.push({ day, startHour: block.start, endHour: block.end });
+    for (let hour = 0; hour < 24; hour++) {
+      const absoluteHour = (day - 1) * 24 + hour;
+      const assigned = hourAssignments.get(absoluteHour);
+      if (!assigned || assigned.size === 0) {
+        // Dodaj tylko jeśli jeszcze nie dodano
+        const alreadyGap = coverageGaps.some(
+          (g) => g.day === day && g.startHour === hour
+        );
+        if (!alreadyGap) {
+          coverageGaps.push({ day, startHour: hour, endHour: hour + 1 });
+        }
       }
     }
+  }
+
+  // Scal godziny w ciągłe zmiany (Shift) per osoba
+  const shifts: Shift[] = [];
+  for (let p = 0; p < peopleCount; p++) {
+    workHoursByPerson[p].sort((a, b) => a - b);
+    shifts.push(...mergeHoursIntoShifts(p, personNames[p], workHoursByPerson[p]));
   }
 
   // Oblicz statystyki
   const stats: PersonStats[] = personNames.map((name, i) => {
+    const personShifts = shifts.filter((s) => s.personId === i);
+    // Oblicz minimalną przerwę między zmianami
     let minBreak = Infinity;
-    const starts = allShiftStarts[i];
-    const ends = allShiftEnds[i];
-
-    for (let s = 0; s < ends.length; s++) {
-      for (let ns = 0; ns < starts.length; ns++) {
-        if (starts[ns] > ends[s]) {
-          const gap = starts[ns] - ends[s];
-          if (gap < minBreak) minBreak = gap;
-        }
-      }
+    const sortedShifts = personShifts.sort((a, b) => {
+      const absA = (a.day - 1) * 24 + a.startHour;
+      const absB = (b.day - 1) * 24 + b.startHour;
+      return absA - absB;
+    });
+    for (let s = 0; s < sortedShifts.length - 1; s++) {
+      const endAbs = (sortedShifts[s].day - 1) * 24 + sortedShifts[s].endHour;
+      const startAbs = (sortedShifts[s + 1].day - 1) * 24 + sortedShifts[s + 1].startHour;
+      const gap = startAbs - endAbs;
+      if (gap > 0 && gap < minBreak) minBreak = gap;
     }
 
     return {
       personId: i,
       personName: name,
-      totalWorkHours: workHours[i],
-      shiftsCount: shiftCounts[i],
+      totalWorkHours: totalWorkHours[i],
+      shiftsCount: personShifts.length,
       minBreakActual: minBreak === Infinity ? 0 : minBreak,
     };
   });
