@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  serverExternalPackages: ['highs'],
+  outputFileTracingIncludes: {
+    '/api/schedule': ['./node_modules/highs/build/**/*'],
+  },
 };
 
 export default nextConfig;
