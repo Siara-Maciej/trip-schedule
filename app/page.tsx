@@ -1,23 +1,23 @@
 'use client';
 
 import Link from 'next/link';
-import { MapPin, Stethoscope, ArrowRight } from 'lucide-react';
+import { Users, CalendarPlus, ArrowRight } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 
 const modules = [
   {
-    title: 'Wycieczka',
-    description: 'Planuj zmiany dla grupy podczas wielodobowej wycieczki. Algorytm LP optymalizuje pokrycie 24/7.',
-    href: '/trip',
-    icon: MapPin,
+    title: 'Osoby',
+    description: 'Zarządzaj pracownikami — dodawaj, edytuj, ustalaj dostępność i limity godzin.',
+    href: '/people',
+    icon: Users,
     color: 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400',
   },
   {
-    title: 'Przychodnia',
-    description: 'Grafik pracowników przychodni — dyżury, godziny otwarcia, preferencje i dostępność.',
-    href: '/clinic',
-    icon: Stethoscope,
+    title: 'Nowy grafik',
+    description: 'Kreator harmonogramu: ustaw okres, zmiany, wymagania kadrowe, przypisz osoby i wygeneruj.',
+    href: '/schedule',
+    icon: CalendarPlus,
     color: 'bg-fuchsia-100 text-fuchsia-600 dark:bg-fuchsia-900/30 dark:text-fuchsia-400',
   },
 ];
@@ -28,7 +28,7 @@ export default function DashboardPage() {
       <div className="mb-8">
         <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
         <p className="mt-1 text-muted-foreground">
-          Wybierz moduł harmonogramu, z którego chcesz skorzystać.
+          Generator harmonogramów pracy
         </p>
       </div>
 

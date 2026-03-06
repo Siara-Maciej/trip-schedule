@@ -3,8 +3,8 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  MapPin,
-  Stethoscope,
+  Users,
+  CalendarPlus,
   LayoutDashboard,
   Settings,
   LogIn,
@@ -29,14 +29,14 @@ const navItems = [
     icon: LayoutDashboard,
   },
   {
-    label: 'Wycieczka',
-    href: '/trip',
-    icon: MapPin,
+    label: 'Osoby',
+    href: '/people',
+    icon: Users,
   },
   {
-    label: 'Przychodnia',
-    href: '/clinic',
-    icon: Stethoscope,
+    label: 'Nowy grafik',
+    href: '/schedule',
+    icon: CalendarPlus,
   },
 ];
 
