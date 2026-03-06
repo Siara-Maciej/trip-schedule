@@ -6,7 +6,7 @@ import { ScheduleTable } from '@/components/ScheduleTable';
 import { TimelineView } from '@/components/TimelineView';
 import { StatsCards } from '@/components/StatsCards';
 import { CoverageAlert } from '@/components/CoverageAlert';
-import { ConstraintsEditor } from '@/components/ConstraintsEditor';
+import { ConstraintsEditor, type NightWorkConfig } from '@/components/ConstraintsEditor';
 import { PersonCreator } from '@/components/PersonCreator';
 import { Button } from '@/components/ui/button';
 import { generateSchedule } from '@/lib/scheduler';
@@ -16,12 +16,6 @@ import type { ScheduleResult, ScheduleConstraint, PersonConfig } from '@/types/s
 
 const PERSONS_KEY = 'schedule-persons';
 const NIGHT_KEY = 'schedule-night';
-
-interface NightWorkConfig {
-  enabled: boolean;
-  nightStartHour: number;
-  nightEndHour: number;
-}
 
 function getStoredPersons(): PersonConfig[] {
   if (typeof window === 'undefined') return [];
@@ -36,12 +30,12 @@ function getStoredPersons(): PersonConfig[] {
 }
 
 function getStoredNight(): NightWorkConfig {
-  if (typeof window === 'undefined') return { enabled: false, nightStartHour: 22, nightEndHour: 6 };
+  if (typeof window === 'undefined') return { enabled: false, nightStartHour: 22, nightEndHour: 6, maxNightPeople: 1 };
   try {
     const stored = localStorage.getItem(NIGHT_KEY);
-    if (stored) return JSON.parse(stored);
+    if (stored) return { maxNightPeople: 1, ...JSON.parse(stored) };
   } catch { /* ignoruj */ }
-  return { enabled: false, nightStartHour: 22, nightEndHour: 6 };
+  return { enabled: false, nightStartHour: 22, nightEndHour: 6, maxNightPeople: 1 };
 }
 
 function buildConstraints(
@@ -51,6 +45,13 @@ function buildConstraints(
   const constraints: ScheduleConstraint[] = [];
 
   if (nightWork.enabled) {
+    constraints.push({
+      type: 'nightShiftLimit',
+      maxPeople: nightWork.maxNightPeople,
+      nightStartHour: nightWork.nightStartHour,
+      nightEndHour: nightWork.nightEndHour,
+    });
+
     for (let i = 0; i < persons.length; i++) {
       if (!persons[i].canWorkAtNight) {
         constraints.push({

@@ -1,13 +1,15 @@
 'use client';
 
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { TimeInput, hourToTime, timeToHour } from '@/components/ui/time-input';
 
-interface NightWorkConfig {
+export interface NightWorkConfig {
   enabled: boolean;
   nightStartHour: number;
   nightEndHour: number;
+  maxNightPeople: number;
 }
 
 interface ConstraintsEditorProps {
@@ -34,20 +36,33 @@ export function ConstraintsEditor({ nightWork, onChange }: ConstraintsEditorProp
           </label>
 
           {nightWork.enabled && (
-            <div className="flex items-center gap-3 pl-6">
-              <div className="space-y-0.5">
-                <Label className="text-xs text-muted-foreground">Noc od</Label>
-                <TimeInput
-                  value={hourToTime(nightWork.nightStartHour)}
-                  onChange={(v) => onChange({ ...nightWork, nightStartHour: timeToHour(v) })}
-                />
+            <div className="space-y-3 pl-6">
+              <div className="flex items-center gap-3">
+                <div className="space-y-0.5">
+                  <Label className="text-xs text-muted-foreground">Noc od</Label>
+                  <TimeInput
+                    value={hourToTime(nightWork.nightStartHour)}
+                    onChange={(v) => onChange({ ...nightWork, nightStartHour: timeToHour(v) })}
+                  />
+                </div>
+                <span className="text-muted-foreground mt-4">–</span>
+                <div className="space-y-0.5">
+                  <Label className="text-xs text-muted-foreground">Noc do</Label>
+                  <TimeInput
+                    value={hourToTime(nightWork.nightEndHour)}
+                    onChange={(v) => onChange({ ...nightWork, nightEndHour: timeToHour(v) })}
+                  />
+                </div>
               </div>
-              <span className="text-muted-foreground mt-4">–</span>
-              <div className="space-y-0.5">
-                <Label className="text-xs text-muted-foreground">Noc do</Label>
-                <TimeInput
-                  value={hourToTime(nightWork.nightEndHour)}
-                  onChange={(v) => onChange({ ...nightWork, nightEndHour: timeToHour(v) })}
+              <div className="flex items-center gap-2">
+                <Label className="text-sm text-muted-foreground whitespace-nowrap">Maks. osób w nocy</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={nightWork.maxNightPeople}
+                  onChange={(e) => onChange({ ...nightWork, maxNightPeople: Math.max(1, Number(e.target.value) || 1) })}
+                  className="w-16 h-9"
                 />
               </div>
             </div>
