@@ -311,6 +311,52 @@ describe('scheduler — MIP (HiGHS)', () => {
     }
   });
 
+  test('daily cap: no person works more than shiftHours per calendar day', async () => {
+    const result = await generateSchedule({
+      peopleCount: 10,
+      totalHours: 24 * 7,
+      startHourOffset: 14,
+      ...uniformParams(10, 8, 11),
+      constraints: [],
+    });
+
+    expect(result.valid).toBe(true);
+
+    // For each person, count work hours per calendar day
+    const totalDays = Math.ceil((14 + 24 * 7) / 24);
+    for (let p = 0; p < 10; p++) {
+      for (let d = 1; d <= totalDays; d++) {
+        const hours = getPersonHoursPerDay(result, p, d);
+        expect(hours.length).toBeLessThanOrEqual(8);
+      }
+    }
+  });
+
+  test('daily cap with night shifts: night workers respect daily limit', async () => {
+    const result = await generateSchedule({
+      peopleCount: 10,
+      totalHours: 24 * 5,
+      startHourOffset: 14,
+      ...uniformParams(10, 8, 11),
+      constraints: [
+        { type: 'nightShiftLimit', maxPeople: 1, nightStartHour: 22, nightEndHour: 6 },
+        ...Array.from({ length: 8 }, (_, i) => ({
+          type: 'personBlocked' as const, personId: i, startHour: 22, endHour: 6,
+        })),
+      ],
+    });
+
+    expect(result.valid).toBe(true);
+
+    const totalDays = Math.ceil((14 + 24 * 5) / 24);
+    for (let p = 0; p < 10; p++) {
+      for (let d = 1; d <= totalDays; d++) {
+        const hours = getPersonHoursPerDay(result, p, d);
+        expect(hours.length).toBeLessThanOrEqual(8);
+      }
+    }
+  });
+
   test('partial last day: everyone gets exactly expected hours, no excess', async () => {
     const result = await generateSchedule({
       peopleCount: 4,

@@ -99,7 +99,8 @@ function sVar(p: number, t: number): string {
  *   1. Coverage: ∀h: Σ_{(p,t): t ≤ h < t+S[p]} s[p][t] ≥ 1
  *   2. Non-overlap + break: ∀p, ∀t: Σ_{t': t ≤ t' < t+S[p]+B[p]} s[p][t'] ≤ 1
  *   3. Night limit: ∀ night hour h: Σ_{(p,t): t ≤ h < t+S[p]} s[p][t] ≤ maxNight
- *   4. Target: numShifts[p] ≈ targetShifts[p]
+ *   4. Daily cap: ∀p, ∀day: total work hours on that calendar day ≤ S[p]
+ *   5. Target: numShifts[p] ≈ targetShifts[p]
  */
 function buildLPModel(params: {
   peopleCount: number;
@@ -199,7 +200,39 @@ function buildLPModel(params: {
     }
   }
 
-  // 4. Target shift deviation
+  // 4. Daily cap: each person works at most S[p] hours per calendar day
+  const totalDays = Math.ceil((startHourOffset + T) / 24);
+  for (let p = 0; p < N; p++) {
+    const S = shiftHours[p];
+    for (let d = 1; d <= totalDays; d++) {
+      // Calendar day d covers sequential hours where floor((h + offset) / 24) + 1 == d
+      const daySeqStart = Math.max(0, (d - 1) * 24 - startHourOffset);
+      const daySeqEnd = Math.min(T, d * 24 - startHourOffset);
+      if (daySeqStart >= daySeqEnd) continue;
+
+      const terms: string[] = [];
+      const coeffs: number[] = [];
+      for (const t of validStarts[p]) {
+        // Shift [t, t+S) — how many hours fall in [daySeqStart, daySeqEnd)?
+        const overlapStart = Math.max(t, daySeqStart);
+        const overlapEnd = Math.min(t + S, daySeqEnd);
+        const overlap = overlapEnd - overlapStart;
+        if (overlap > 0) {
+          if (overlap === 1) {
+            terms.push(sVar(p, t));
+          } else {
+            terms.push(`${overlap} ${sVar(p, t)}`);
+          }
+          coeffs.push(overlap);
+        }
+      }
+      if (terms.length > 0) {
+        lines.push(` c${cIdx++}: ${terms.join(' + ')} <= ${S}`);
+      }
+    }
+  }
+
+  // 5. Target shift deviation
   for (let p = 0; p < N; p++) {
     if (validStarts[p].length === 0) continue;
     const terms = validStarts[p].map(t => sVar(p, t));
