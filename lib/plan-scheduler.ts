@@ -81,17 +81,6 @@ interface DaySlot {
   assigned: Person[];
 }
 
-/**
- * Score a candidate for a particular shift slot.
- * Lower = better candidate.
- *
- * With fairDistribution:
- *   1. Prefer person who has done THIS shift type least
- *   2. Break ties by total hours used (least first)
- *
- * Without fairDistribution:
- *   1. Sort by least total hours used
- */
 function candidateScore(
   person: Person,
   shiftName: string,
@@ -113,12 +102,22 @@ function compareCandidates(a: [number, number], b: [number, number]): number {
 }
 
 /**
+ * Compute the total hour budget for a person across the whole period.
+ * Uses the actual calendar span (not just working days count) to calculate weeks,
+ * so a month with 5 calendar weeks gives 5× the weekly budget.
+ */
+function computeBudget(person: Person, dates: Date[]): number {
+  if (dates.length === 0) return 0;
+  const first = dates[0].getTime();
+  const last = dates[dates.length - 1].getTime();
+  const spanDays = (last - first) / (1000 * 60 * 60 * 24) + 1;
+  const calendarWeeks = Math.max(1, Math.ceil(spanDays / 7));
+  return person.weeklyHours * calendarWeeks;
+}
+
+/**
  * Main scheduler — interleaved round-robin for required shifts,
  * then optional shifts for quota fulfilment.
- *
- * Key improvement: instead of filling shifts sequentially (which puts
- * everyone on shift 1 when oneShiftPerDay is on), we distribute people
- * across ALL required shifts simultaneously using round-robin.
  */
 export function generatePlanSchedule(
   people: Person[],
@@ -141,17 +140,24 @@ export function generatePlanSchedule(
 
   // ── Tracking state ──
   const hoursUsed = new Map<string, number>();
-  for (const p of people) hoursUsed.set(p.id, 0);
+  const hoursBudget = new Map<string, number>();
+  for (const p of people) {
+    hoursUsed.set(p.id, 0);
+    hoursBudget.set(p.id, computeBudget(p, dates));
+  }
 
   const lastShiftEnd = new Map<string, number>();
+  const periodStartTime = dates[0].getTime();
 
   // personId → Map<shiftName, count>
   const shiftTypeCounts = new Map<string, Map<string, number>>();
   for (const p of people) shiftTypeCounts.set(p.id, new Map());
 
+  // Track working days per person (for natural days-off distribution)
+  const daysWorked = new Map<string, number>();
+  for (const p of people) daysWorked.set(p.id, 0);
+
   const resultShifts: PlanShift[] = [];
-  const totalWeeks = Math.max(1, Math.ceil(dates.length / 7));
-  const periodStartTime = dates[0].getTime();
 
   // ── Per-day scheduling ──
   for (const date of dates) {
@@ -163,7 +169,6 @@ export function generatePlanSchedule(
     const dateStr = date.toISOString().slice(0, 10);
     const dayOffsetHours = (date.getTime() - periodStartTime) / (1000 * 60 * 60);
 
-    // People assigned on this day (for oneShiftPerDay tracking)
     const assignedToday = new Set<string>();
 
     // Build slots
@@ -189,10 +194,8 @@ export function generatePlanSchedule(
     const canWork = (person: Person, slot: DaySlot): boolean => {
       if (person.unavailableDays.includes(dowMon)) return false;
 
-      // One shift per day
       if (oneShiftPerDay && assignedToday.has(person.id)) return false;
 
-      // Time overlap check (when multiple shifts per day allowed)
       if (!oneShiftPerDay) {
         for (const rs of [...requiredSlots, ...optionalSlots]) {
           if (rs.assigned.some((p) => p.id === person.id)) {
@@ -201,14 +204,13 @@ export function generatePlanSchedule(
         }
       }
 
-      // Rest period from previous day
       const absoluteStart = dayOffsetHours + slot.startH;
       const lastEnd = lastShiftEnd.get(person.id);
       if (lastEnd !== undefined && absoluteStart - lastEnd < MIN_REST_HOURS) return false;
 
-      // Weekly hours limit
       const used = hoursUsed.get(person.id) ?? 0;
-      if (used + slot.shiftHours > person.weeklyHours * totalWeeks) return false;
+      const budget = hoursBudget.get(person.id) ?? 0;
+      if (used + slot.shiftHours > budget) return false;
 
       return true;
     };
@@ -219,6 +221,11 @@ export function generatePlanSchedule(
       assignedToday.add(person.id);
       hoursUsed.set(person.id, (hoursUsed.get(person.id) ?? 0) + slot.shiftHours);
       lastShiftEnd.set(person.id, dayOffsetHours + slot.endH);
+
+      if (!assignedToday.has(`counted:${person.id}`)) {
+        daysWorked.set(person.id, (daysWorked.get(person.id) ?? 0) + 1);
+        assignedToday.add(`counted:${person.id}`);
+      }
 
       const personTypes = shiftTypeCounts.get(person.id)!;
       personTypes.set(slot.shift.name, (personTypes.get(slot.shift.name) ?? 0) + 1);
@@ -234,7 +241,7 @@ export function generatePlanSchedule(
       });
     };
 
-    // ── Helper: pick best candidate for a slot from a list of people ──
+    // ── Helper: pick best candidate for a slot ──
     const pickBest = (candidates: Person[], slot: DaySlot): Person | null => {
       let best: Person | null = null;
       let bestScore: [number, number] = [Infinity, Infinity];
@@ -254,47 +261,39 @@ export function generatePlanSchedule(
     // ══════════════════════════════════════════════════════
     // PHASE 1: Fill required shifts — interleaved round-robin
     //
-    // Instead of filling shift 1 then shift 2 (which starves shift 2),
-    // we repeatedly pick the shift with fewest assigned and add 1 person.
-    // This guarantees even distribution: min(2) across 3 shifts with 6 people → 2-2-2.
+    // Repeatedly pick the required shift with fewest assigned and add
+    // 1 person. If a slot is stuck (no candidates), skip it and try others.
     // ══════════════════════════════════════════════════════
 
     if (requiredSlots.length > 0) {
-      // Phase 1a: Fill all required shifts to minPerShift (interleaved)
-      let madeProgress = true;
-      while (madeProgress) {
-        madeProgress = false;
+      // Phase 1a: Fill all required shifts to minPerShift
+      const stuckSlots = new Set<DaySlot>();
 
-        // Sort slots: fewest assigned first (fill the neediest shift next)
+      while (true) {
         const needySlots = requiredSlots
-          .filter((s) => s.assigned.length < constraints.minPerShift)
+          .filter((s) => s.assigned.length < constraints.minPerShift && !stuckSlots.has(s))
           .sort((a, b) => a.assigned.length - b.assigned.length);
 
         if (needySlots.length === 0) break;
 
-        // Try to assign ONE person to the neediest slot
         const slot = needySlots[0];
-        const availablePeople = people.filter((p) => canWork(p, slot));
-        const best = pickBest(availablePeople, slot);
+        const best = pickBest(people, slot);
 
         if (best) {
           assignPerson(best, slot);
-          madeProgress = true;
+          // State changed — previously stuck slots might now have candidates
+          stuckSlots.clear();
         } else {
-          // Can't fill this slot's minimum — emit warning and try next
-          // Remove it from the "needy" pool so we don't loop
-          // Mark it by setting a flag (we'll warn after the loop)
-          break;
+          stuckSlots.add(slot);
         }
       }
 
       // Phase 1b: Fill required shifts up to maxPerShift (also interleaved)
-      madeProgress = true;
-      while (madeProgress) {
-        madeProgress = false;
+      stuckSlots.clear();
 
+      while (true) {
         const fillableSlots = requiredSlots
-          .filter((s) => s.assigned.length < constraints.maxPerShift)
+          .filter((s) => s.assigned.length < constraints.maxPerShift && !stuckSlots.has(s))
           .sort((a, b) => a.assigned.length - b.assigned.length);
 
         if (fillableSlots.length === 0) break;
@@ -304,9 +303,9 @@ export function generatePlanSchedule(
 
         if (best) {
           assignPerson(best, slot);
-          madeProgress = true;
+          stuckSlots.clear();
         } else {
-          break;
+          stuckSlots.add(slot);
         }
       }
 
@@ -323,31 +322,27 @@ export function generatePlanSchedule(
     // ══════════════════════════════════════════════════════
     // PHASE 2: Optional shifts
     //
-    // Assign people who still need more of this shift type
-    // (minPerPersonInPeriod quota) or as fallback for coverage.
+    // Assign people who still need this shift type for their quota.
+    // With oneShiftPerDay, they can only get an optional shift on a day
+    // when they're NOT already on a required shift.
     // ══════════════════════════════════════════════════════
 
     for (const slot of optionalSlots) {
       const minPerPerson = slot.shift.minPerPersonInPeriod ?? 0;
 
-      // Sort candidates by who needs this shift most (quota deficit)
       const candidates = people
         .filter((p) => canWork(p, slot))
         .map((p) => {
           const done = shiftTypeCounts.get(p.id)?.get(slot.shift.name) ?? 0;
-          const deficit = minPerPerson - done; // positive = needs more
+          const deficit = minPerPerson - done;
           return { person: p, deficit, done };
         })
         .filter((c) => {
-          // If quota is 0, only assign if somehow needed (we skip for now)
           if (minPerPerson === 0) return false;
-          // Only assign if person still has quota to fill
           return c.deficit > 0;
         })
         .sort((a, b) => {
-          // Most deficit first
           if (a.deficit !== b.deficit) return b.deficit - a.deficit;
-          // Then least hours
           return (hoursUsed.get(a.person.id) ?? 0) - (hoursUsed.get(b.person.id) ?? 0);
         });
 
@@ -386,7 +381,6 @@ export function generatePlanSchedule(
   };
 }
 
-/** Helper: get all unique shift definitions from a working hours config. */
 function getAllShifts(wh: WorkingHoursConfig): ShiftDefinition[] {
   switch (wh.type) {
     case 'continuous':
@@ -396,7 +390,6 @@ function getAllShifts(wh: WorkingHoursConfig): ShiftDefinition[] {
     case 'shifts':
       return wh.shifts;
     case 'custom': {
-      // Deduplicate by shift name
       const map = new Map<string, ShiftDefinition>();
       for (const dayConfig of Object.values(wh.days)) {
         if (!dayConfig.enabled) continue;
