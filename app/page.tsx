@@ -108,7 +108,7 @@ function SchedulePage() {
     const names = persons.map((p, i) => p.name.trim() || `Osoba ${i + 1}`);
     const constraints = buildConstraints(persons, nightWork);
 
-    const scheduleResult = generateSchedule({
+    const scheduleParams = {
       peopleCount: persons.length,
       totalHours,
       startHourOffset,
@@ -116,7 +116,13 @@ function SchedulePage() {
       perPersonShiftHours: persons.map((p) => p.hoursPerShift),
       perPersonMinBreak: persons.map((p) => p.minBreakHours),
       constraints,
-    });
+    };
+
+    console.log('[SCHEDULER INPUT]', JSON.stringify(scheduleParams, null, 2));
+
+    const scheduleResult = generateSchedule(scheduleParams);
+
+    console.log('[SCHEDULER OUTPUT]', JSON.stringify(scheduleResult, null, 2));
 
     setResult(scheduleResult);
     setDurationDays(daysCount);

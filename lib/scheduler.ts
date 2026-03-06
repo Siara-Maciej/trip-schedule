@@ -34,6 +34,26 @@ function mergeHoursIntoShifts(
   if (hours.length === 0) return [];
   const shifts: Shift[] = [];
 
+  // Push a block, splitting at day (midnight) boundaries so startHour < endHour always.
+  function pushBlock(start: number, end: number) {
+    let cur = start;
+    while (cur < end) {
+      const day = Math.floor((cur + offset) / 24) + 1;
+      const dayEndSeq = day * 24 - offset; // seqHour where this calendar day ends
+      const blockEndInDay = Math.min(end, dayEndSeq);
+
+      shifts.push({
+        personId,
+        personName,
+        day,
+        startHour: (cur + offset) % 24,
+        endHour: (blockEndInDay + offset) % 24 || 24,
+        type: 'WORK',
+      });
+      cur = blockEndInDay;
+    }
+  }
+
   let blockStart = hours[0];
   let blockEnd = hours[0] + 1;
 
@@ -41,29 +61,12 @@ function mergeHoursIntoShifts(
     if (hours[i] === blockEnd) {
       blockEnd = hours[i] + 1;
     } else {
-      const day = Math.floor((blockStart + offset) / 24) + 1;
-      shifts.push({
-        personId,
-        personName,
-        day,
-        startHour: (blockStart + offset) % 24,
-        endHour: (blockEnd + offset) % 24 || 24,
-        type: 'WORK',
-      });
+      pushBlock(blockStart, blockEnd);
       blockStart = hours[i];
       blockEnd = hours[i] + 1;
     }
   }
-
-  const day = Math.floor((blockStart + offset) / 24) + 1;
-  shifts.push({
-    personId,
-    personName,
-    day,
-    startHour: (blockStart + offset) % 24,
-    endHour: (blockEnd + offset) % 24 || 24,
-    type: 'WORK',
-  });
+  pushBlock(blockStart, blockEnd);
 
   return shifts;
 }
@@ -161,8 +164,21 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
     hourAssignments.get(seqHour)!.add(p);
   }
 
+  function isNightHour(clockHour: number): boolean {
+    return !!nightConstraint && isHourInRange(clockHour, nightConstraint.nightStartHour, nightConstraint.nightEndHour);
+  }
+
+  function nightLimitReached(seqHour: number): boolean {
+    if (!nightConstraint) return false;
+    const assigned = hourAssignments.get(seqHour);
+    return !!assigned && assigned.size >= nightConstraint.maxPeople;
+  }
+
   // Main loop: iterate exactly totalHours sequential hours
   for (let seqHour = 0; seqHour < totalHours; seqHour++) {
+    const clockHour = getClockHour(seqHour);
+    const nightHour = isNightHour(clockHour);
+
     const available: number[] = [];
     for (let p = 0; p < peopleCount; p++) {
       if (canPersonWorkHour(p, seqHour)) {
@@ -170,7 +186,16 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
       }
     }
 
-    // Calculate target workers: estimate total remaining work across the schedule
+    if (available.length === 0) {
+      const assigned = hourAssignments.get(seqHour);
+      if (!assigned || assigned.size === 0) {
+        const day = getCalendarDay(seqHour);
+        coverageGaps.push({ day, startHour: clockHour, endHour: clockHour + 1 });
+      }
+      continue;
+    }
+
+    // Dynamic target: estimate remaining work / remaining time
     const remainingScheduleHours = Math.max(1, totalHours - seqHour);
     let totalRemainingWork = 0;
     for (let p = 0; p < peopleCount; p++) {
@@ -187,41 +212,44 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
     }
     const targetThisHour = Math.max(1, Math.ceil(totalRemainingWork / remainingScheduleHours));
 
-    if (available.length === 0) {
-      const assigned = hourAssignments.get(seqHour);
-      if (!assigned || assigned.size === 0) {
-        const day = getCalendarDay(seqHour);
-        coverageGaps.push({ day, startHour: getClockHour(seqHour), endHour: getClockHour(seqHour) + 1 });
-      }
-      continue;
-    }
-
+    // Sort: in-block first, then longest-rested, then fewest total hours
     available.sort((a, b) => {
-      // 1. Continue current work block (shift continuity)
       const aInBlock = lastWorkEnd[a] === seqHour;
       const bInBlock = lastWorkEnd[b] === seqHour;
       if (aInBlock !== bInBlock) return aInBlock ? -1 : 1;
 
-      // 2. Prefer person with more remaining capacity in current shift
-      const aRemaining = shiftHours[a] - hoursWorkedSinceBreak[a];
-      const bRemaining = shiftHours[b] - hoursWorkedSinceBreak[b];
-      if (aRemaining !== bRemaining) return bRemaining - aRemaining;
+      // Among non-in-block: prefer person available longest (break ended earliest)
+      if (!aInBlock && !bInBlock) {
+        const aAvailSince = lastWorkEnd[a] === -Infinity ? -Infinity : lastWorkEnd[a] + minBreaks[a];
+        const bAvailSince = lastWorkEnd[b] === -Infinity ? -Infinity : lastWorkEnd[b] + minBreaks[b];
+        if (aAvailSince !== bAvailSince) return aAvailSince - bAvailSince;
+      }
 
-      // 3. Balance total hours across people
       return totalWorkHoursArr[a] - totalWorkHoursArr[b];
     });
 
-    const toAssign = Math.min(targetThisHour, available.length);
-    for (let i = 0; i < toAssign; i++) {
-      const p = available[i];
-      const clockHour = getClockHour(seqHour);
-
-      if (nightConstraint && isHourInRange(clockHour, nightConstraint.nightStartHour, nightConstraint.nightEndHour)) {
-        const assigned = hourAssignments.get(seqHour);
-        if (assigned && assigned.size >= nightConstraint.maxPeople) break;
-      }
-
+    // Phase 1: continue in-block people (up to target, for shift continuity)
+    let assignedThisHour = 0;
+    const assignedSet = new Set<number>();
+    for (const p of available) {
+      if (lastWorkEnd[p] !== seqHour) break; // sorted: in-block first
+      if (assignedThisHour >= targetThisHour) break;
+      if (nightHour && nightLimitReached(seqHour)) break;
       assignWork(p, seqHour);
+      assignedSet.add(p);
+      assignedThisHour++;
+    }
+
+    // Phase 2: start at most 1 new shift per hour (stagger to prevent herd breaks)
+    // Always start if nobody assigned yet (coverage guarantee)
+    if (assignedThisHour < targetThisHour || assignedThisHour === 0) {
+      for (const p of available) {
+        if (assignedSet.has(p)) continue; // already handled in Phase 1
+        if (nightHour && nightLimitReached(seqHour)) break;
+        assignWork(p, seqHour);
+        assignedThisHour++;
+        break; // max 1 new start per hour
+      }
     }
   }
 
