@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AppShell } from "@/components/layout/AppShell";
 
 export const metadata: Metadata = {
   title: "Generator Harmonogramu Pracy",
-  description: "Generuj optymalny harmonogram pracy dla grupy osób podczas wielodobowej wycieczki",
+  description: "Generuj optymalny harmonogram pracy — wycieczki i przychodnie",
 };
 
 export default function RootLayout({
@@ -14,7 +15,7 @@ export default function RootLayout({
   return (
     <html lang="pl" suppressHydrationWarning>
       <body className="antialiased">
-        {children}
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );
