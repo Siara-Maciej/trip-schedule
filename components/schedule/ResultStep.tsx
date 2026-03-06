@@ -93,7 +93,7 @@ export function ResultStep({ result, workingHours, onBack, onReset }: ResultStep
       )}
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Card>
           <CardContent className="pt-6">
             <div className="text-2xl font-bold text-primary">{result.daysCount}</div>
@@ -133,10 +133,10 @@ export function ResultStep({ result, workingHours, onBack, onReset }: ResultStep
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="space-y-3">
+          <div className="min-w-[480px] space-y-3 overflow-x-auto">
             {/* Hour header */}
             <div className="flex items-end gap-2">
-              <div className="w-24 shrink-0 sm:w-32" />
+              <div className="w-20 shrink-0 sm:w-32" />
               <div className="relative flex h-5 flex-1">
                 {Array.from({ length: totalRange + 1 }, (_, i) => (
                   <span
@@ -156,7 +156,7 @@ export function ResultStep({ result, workingHours, onBack, onReset }: ResultStep
             {/* Day rows */}
             {[...byDate.entries()].map(([date, shifts]) => (
               <div key={date} className="flex items-center gap-2">
-                <div className="w-24 shrink-0 text-right text-xs font-medium sm:w-32 sm:text-sm">
+                <div className="w-20 shrink-0 text-right text-xs font-medium sm:w-32 sm:text-sm">
                   {shifts[0].dayLabel}
                 </div>
                 <div className="relative h-9 flex-1 rounded-md bg-muted/50">

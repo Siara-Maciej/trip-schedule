@@ -209,7 +209,7 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
   ) => (
     <div className="space-y-2">
       {shiftList.map((s, i) => (
-        <div key={i} className="flex items-center gap-2">
+        <div key={i} className="flex flex-wrap items-center gap-2">
           <Input
             value={s.name}
             onChange={(e) => {
@@ -217,40 +217,42 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
               copy[i] = { ...copy[i], name: e.target.value };
               onChange(copy);
             }}
-            className="w-32 bg-background"
+            className="w-full bg-background sm:w-32"
             placeholder="Nazwa"
           />
-          <Input
-            type="time"
-            value={s.startTime}
-            onChange={(e) => {
-              const copy = [...shiftList];
-              copy[i] = { ...copy[i], startTime: e.target.value };
-              onChange(copy);
-            }}
-            className="w-28 bg-background"
-          />
-          <span className="text-muted-foreground">—</span>
-          <Input
-            type="time"
-            value={s.endTime}
-            onChange={(e) => {
-              const copy = [...shiftList];
-              copy[i] = { ...copy[i], endTime: e.target.value };
-              onChange(copy);
-            }}
-            className="w-28 bg-background"
-          />
-          {shiftList.length > 1 && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-destructive"
-              onClick={() => onChange(shiftList.filter((_, j) => j !== i))}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            <Input
+              type="time"
+              value={s.startTime}
+              onChange={(e) => {
+                const copy = [...shiftList];
+                copy[i] = { ...copy[i], startTime: e.target.value };
+                onChange(copy);
+              }}
+              className="w-28 bg-background"
+            />
+            <span className="text-muted-foreground">—</span>
+            <Input
+              type="time"
+              value={s.endTime}
+              onChange={(e) => {
+                const copy = [...shiftList];
+                copy[i] = { ...copy[i], endTime: e.target.value };
+                onChange(copy);
+              }}
+              className="w-28 bg-background"
+            />
+            {shiftList.length > 1 && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 text-destructive"
+                onClick={() => onChange(shiftList.filter((_, j) => j !== i))}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
         </div>
       ))}
       <Button
