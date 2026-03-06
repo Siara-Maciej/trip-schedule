@@ -73,10 +73,13 @@ function jsDowToMon(jsDow: number): number {
   return jsDow === 0 ? 6 : jsDow - 1;
 }
 
+/** Minimum rest hours between end of last shift and start of next */
+const MIN_REST_HOURS = 8;
+
 /**
  * Greedy scheduler:
  * For each date, for each shift definition, assign people
- * respecting weekly hours and constraints.
+ * respecting weekly hours, overlap prevention, rest periods, and constraints.
  */
 export function generatePlanSchedule(
   people: Person[],
@@ -91,11 +94,27 @@ export function generatePlanSchedule(
     return { shifts: [], warnings: ['Brak dni w wybranym okresie.'], totalHours: 0, daysCount: 0 };
   }
 
-  // Track hours per person (for weekly limit distribution)
+  if (people.length === 0) {
+    return { shifts: [], warnings: ['Brak przypisanych osób.'], totalHours: 0, daysCount: dates.length };
+  }
+
+  // Track hours per person (for limit distribution)
   const hoursUsed = new Map<string, number>();
   for (const p of people) hoursUsed.set(p.id, 0);
 
+  // Track last shift end (absolute hour from period start) per person
+  // to enforce rest between shifts
+  const lastShiftEnd = new Map<string, number>();
+
+  // Track which shifts a person is assigned to on a given date
+  // Key: `${personId}:${dateStr}`, Value: Array of [startH, endH]
+  const assignedShifts = new Map<string, [number, number][]>();
+
   const resultShifts: PlanShift[] = [];
+  const totalWeeks = Math.max(1, Math.ceil(dates.length / 7));
+
+  // Calculate absolute hour offset for rest period tracking
+  const periodStartTime = dates[0].getTime();
 
   for (const date of dates) {
     const dowMon = jsDowToMon(date.getDay());
@@ -105,26 +124,51 @@ export function generatePlanSchedule(
 
     const dayLabel = `${DAY_LABELS[date.getDay()]} ${date.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' })}`;
     const dateStr = date.toISOString().slice(0, 10);
+    const dayOffsetHours = (date.getTime() - periodStartTime) / (1000 * 60 * 60);
 
     for (const shiftDef of dayShifts) {
       const startH = parseHour(shiftDef.startTime);
       const endH = shiftDef.endTime === '24:00' ? 24 : parseHour(shiftDef.endTime);
       const shiftHours = endH - startH;
 
-      // Filter available people for this day
+      if (shiftHours <= 0) continue;
+
+      const absoluteStart = dayOffsetHours + startH;
+      const absoluteEnd = dayOffsetHours + endH;
+
+      // Filter available people for this shift
       const available = people
-        .filter((p) => !p.unavailableDays.includes(dowMon))
+        .filter((p) => {
+          // Day availability
+          if (p.unavailableDays.includes(dowMon)) return false;
+
+          // Check overlap with already assigned shifts on the same date
+          const key = `${p.id}:${dateStr}`;
+          const existing = assignedShifts.get(key) ?? [];
+          for (const [existStart, existEnd] of existing) {
+            if (startH < existEnd && endH > existStart) return false;
+          }
+
+          // Check rest period since last shift
+          const lastEnd = lastShiftEnd.get(p.id);
+          if (lastEnd !== undefined && absoluteStart - lastEnd < MIN_REST_HOURS) {
+            return false;
+          }
+
+          // Check hours limit
+          const used = hoursUsed.get(p.id) ?? 0;
+          if (used + shiftHours > p.weeklyHours * totalWeeks) {
+            return false;
+          }
+
+          return true;
+        })
         .sort((a, b) => (hoursUsed.get(a.id) ?? 0) - (hoursUsed.get(b.id) ?? 0));
 
       let assigned = 0;
 
       for (const person of available) {
         if (assigned >= constraints.maxPerShift) break;
-
-        const used = hoursUsed.get(person.id) ?? 0;
-        if (used + shiftHours > person.weeklyHours * Math.max(1, Math.ceil(dates.length / 7))) {
-          continue;
-        }
 
         resultShifts.push({
           personId: person.id,
@@ -136,7 +180,14 @@ export function generatePlanSchedule(
           endHour: endH,
         });
 
-        hoursUsed.set(person.id, used + shiftHours);
+        hoursUsed.set(person.id, (hoursUsed.get(person.id) ?? 0) + shiftHours);
+        lastShiftEnd.set(person.id, absoluteEnd);
+
+        const key = `${person.id}:${dateStr}`;
+        const existing = assignedShifts.get(key) ?? [];
+        existing.push([startH, endH]);
+        assignedShifts.set(key, existing);
+
         assigned++;
       }
 
