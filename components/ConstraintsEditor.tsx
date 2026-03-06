@@ -30,7 +30,7 @@ export function ConstraintsEditor({ nightWork, onChange }: ConstraintsEditorProp
               type="checkbox"
               checked={nightWork.enabled}
               onChange={(e) => onChange({ ...nightWork, enabled: e.target.checked })}
-              className="h-4 w-4 rounded border-gray-300 accent-primary"
+              className="h-5 w-5 shrink-0 appearance-none rounded border-2 border-muted-foreground/40 bg-background checked:border-primary checked:bg-primary cursor-pointer checked:bg-[url('data:image/svg+xml;utf8,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2024%2024%22%20fill=%22none%22%20stroke=%22white%22%20stroke-width=%224%22%20stroke-linecap=%22round%22%20stroke-linejoin=%22round%22%3E%3Cpolyline%20points=%2220%206%209%2017%204%2012%22/%3E%3C/svg%3E')] checked:bg-center checked:bg-no-repeat checked:bg-[length:14px_14px]"
             />
             <span className="text-sm font-medium">Wymagana praca w nocy</span>
           </label>
