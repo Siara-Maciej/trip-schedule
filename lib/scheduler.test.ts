@@ -2,7 +2,7 @@ import { describe, test, expect } from 'vitest';
 import { generateSchedule } from './scheduler';
 
 // Pomocnicza — zbierz pracujące godziny per osoba per dzień
-function getPersonHoursPerDay(result: ReturnType<typeof generateSchedule>, personId: number, day: number): number[] {
+function getPersonHoursPerDay(result: Awaited<ReturnType<typeof generateSchedule>>, personId: number, day: number): number[] {
   const hours: number[] = [];
   for (const shift of result.shifts) {
     if (shift.personId === personId && shift.day === day) {
@@ -22,9 +22,9 @@ function uniformParams(peopleCount: number, hoursPerShift: number, minBreakHours
   };
 }
 
-describe('scheduler — granulacja 1h', () => {
-  test('3 osoby, 8h praca, 3 doby, 8h przerwy → valid, każda osoba codziennie', () => {
-    const result = generateSchedule({
+describe('scheduler — MIP (HiGHS)', () => {
+  test('3 osoby, 8h praca, 3 doby, 8h przerwy → valid, każda osoba codziennie', async () => {
+    const result = await generateSchedule({
       peopleCount: 3,
       totalHours: 24 * 3,
       ...uniformParams(3, 8, 8),
@@ -40,8 +40,8 @@ describe('scheduler — granulacja 1h', () => {
     }
   });
 
-  test('10 osób, 8h praca, 3 doby, 8h przerwy → valid, każda osoba codziennie', () => {
-    const result = generateSchedule({
+  test('10 osób, 8h praca, 3 doby, 8h przerwy → valid, każda osoba codziennie', async () => {
+    const result = await generateSchedule({
       peopleCount: 10,
       totalHours: 24 * 3,
       ...uniformParams(10, 8, 8),
@@ -57,16 +57,15 @@ describe('scheduler — granulacja 1h', () => {
     }
   });
 
-  test('każda osoba pracuje max hoursPerShift godzin per zmianę (między przerwami)', () => {
+  test('każda osoba pracuje max hoursPerShift godzin per zmianę (między przerwami)', async () => {
     const hoursPerShift = 8;
     const minBreakHours = 8;
-    const result = generateSchedule({
+    const result = await generateSchedule({
       peopleCount: 4,
       totalHours: 24 * 3,
       ...uniformParams(4, hoursPerShift, minBreakHours),
     });
 
-    // Verify per-shift limit: between adequate breaks, max hoursPerShift worked
     for (let p = 0; p < 4; p++) {
       const allHours: number[] = [];
       for (const shift of result.shifts) {
@@ -91,10 +90,10 @@ describe('scheduler — granulacja 1h', () => {
     }
   });
 
-  test('po hoursPerShift godzinach pracy, przerwa >= minBreakHours', () => {
+  test('po hoursPerShift godzinach pracy, przerwa >= minBreakHours', async () => {
     const hoursPerShift = 8;
     const minBreakHours = 8;
-    const result = generateSchedule({
+    const result = await generateSchedule({
       peopleCount: 4,
       totalHours: 24 * 3,
       ...uniformParams(4, hoursPerShift, minBreakHours),
@@ -125,8 +124,8 @@ describe('scheduler — granulacja 1h', () => {
     }
   });
 
-  test('pokrycie: każda godzina każdego dnia ma co najmniej 1 osobę', () => {
-    const result = generateSchedule({
+  test('pokrycie: każda godzina każdego dnia ma co najmniej 1 osobę', async () => {
+    const result = await generateSchedule({
       peopleCount: 4,
       totalHours: 24 * 2,
       ...uniformParams(4, 8, 8),
@@ -144,8 +143,8 @@ describe('scheduler — granulacja 1h', () => {
     }
   });
 
-  test('praca może być rozbita — nie musi być ciągła', () => {
-    const result = generateSchedule({
+  test('praca może być rozbita — nie musi być ciągła', async () => {
+    const result = await generateSchedule({
       peopleCount: 4,
       totalHours: 24 * 2,
       ...uniformParams(4, 8, 8),
@@ -154,8 +153,8 @@ describe('scheduler — granulacja 1h', () => {
     expect(result.shifts.length).toBeGreaterThan(0);
   });
 
-  test('2 osoby, 12h praca, 2 doby, 12h przerwy → valid', () => {
-    const result = generateSchedule({
+  test('2 osoby, 12h praca, 2 doby, 12h przerwy → valid', async () => {
+    const result = await generateSchedule({
       peopleCount: 2,
       totalHours: 24 * 2,
       ...uniformParams(2, 12, 12),
@@ -164,8 +163,8 @@ describe('scheduler — granulacja 1h', () => {
     expect(result.coverageGaps).toHaveLength(0);
   });
 
-  test('generowanie nazw osób', () => {
-    const result = generateSchedule({
+  test('generowanie nazw osób', async () => {
+    const result = await generateSchedule({
       peopleCount: 4,
       totalHours: 24 * 1,
       ...uniformParams(4, 8, 8),
@@ -181,8 +180,8 @@ describe('scheduler — granulacja 1h', () => {
 
   // --- Testy constraintów ---
 
-  test('limit nocny: max 1 osoba w nocy (22-6)', () => {
-    const result = generateSchedule({
+  test('limit nocny: max 1 osoba w nocy (22-6)', async () => {
+    const result = await generateSchedule({
       peopleCount: 4,
       totalHours: 24 * 2,
       ...uniformParams(4, 8, 8),
@@ -203,8 +202,8 @@ describe('scheduler — granulacja 1h', () => {
     }
   });
 
-  test('osoba zablokowana w godzinach 0-8 nie pracuje 0-8', () => {
-    const result = generateSchedule({
+  test('osoba zablokowana w godzinach 0-8 nie pracuje 0-8', async () => {
+    const result = await generateSchedule({
       peopleCount: 3,
       totalHours: 24 * 2,
       ...uniformParams(3, 8, 8),
@@ -221,8 +220,8 @@ describe('scheduler — granulacja 1h', () => {
     }
   });
 
-  test('osoba zablokowana nocą (22-6) nie pracuje w tych godzinach', () => {
-    const result = generateSchedule({
+  test('osoba zablokowana nocą (22-6) nie pracuje w tych godzinach', async () => {
+    const result = await generateSchedule({
       peopleCount: 4,
       totalHours: 24 * 2,
       ...uniformParams(4, 8, 8),
@@ -239,8 +238,8 @@ describe('scheduler — granulacja 1h', () => {
     }
   });
 
-  test('zbyt długa przerwa → valid: false', () => {
-    const result = generateSchedule({
+  test('zbyt długa przerwa → valid: false', async () => {
+    const result = await generateSchedule({
       peopleCount: 2,
       totalHours: 24 * 3,
       ...uniformParams(2, 12, 24),
@@ -251,15 +250,14 @@ describe('scheduler — granulacja 1h', () => {
 
   // --- Per-person params ---
 
-  test('per-person shift durations: each shift respects per-person limit', () => {
-    const result = generateSchedule({
+  test('per-person shift durations: each shift respects per-person limit', async () => {
+    const result = await generateSchedule({
       peopleCount: 3,
       totalHours: 24 * 2,
       perPersonShiftHours: [6, 8, 10],
       perPersonMinBreak: [6, 8, 10],
     });
 
-    // Verify each person's shifts don't exceed their shift duration
     const shiftLimits = [6, 8, 10];
     const breakLimits = [6, 8, 10];
     for (let p = 0; p < 3; p++) {
@@ -288,10 +286,10 @@ describe('scheduler — granulacja 1h', () => {
 
   // --- Start hour offset ---
 
-  test('startHourOffset: schedule starts at hour 14, no work before 14:00 on day 1', () => {
-    const result = generateSchedule({
+  test('startHourOffset: schedule starts at hour 14, no work before 14:00 on day 1', async () => {
+    const result = await generateSchedule({
       peopleCount: 3,
-      totalHours: 48, // 48h from 14:00 day1 to 14:00 day3
+      totalHours: 48,
       startHourOffset: 14,
       ...uniformParams(3, 8, 8),
     });
@@ -313,11 +311,8 @@ describe('scheduler — granulacja 1h', () => {
     }
   });
 
-  test('partial last day: everyone gets exactly expected hours, no excess', () => {
-    // Simulates: start 02:00, end 21:00 three days later (91 hours)
-    // 4 people, 8h shifts, 11h breaks, night 00-08 max 1 person
-    // Expected: floor(91/19) = 4 full cycles × 8h = 32h per person
-    const result = generateSchedule({
+  test('partial last day: everyone gets exactly expected hours, no excess', async () => {
+    const result = await generateSchedule({
       peopleCount: 4,
       totalHours: 91,
       startHourOffset: 2,

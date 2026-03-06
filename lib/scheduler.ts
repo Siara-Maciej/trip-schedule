@@ -2,6 +2,17 @@ import type {
   ScheduleParams, ScheduleResult, Shift, PersonStats, TimeGap,
   NightShiftLimit, ScheduleConstraint,
 } from '@/types/schedule';
+import highs_loader from 'highs';
+
+// Singleton HiGHS instance — loaded once, reused.
+let highsInstance: Awaited<ReturnType<typeof highs_loader>> | null = null;
+
+async function getHiGHS() {
+  if (!highsInstance) {
+    highsInstance = await highs_loader();
+  }
+  return highsInstance;
+}
 
 function isHourInRange(hour: number, rangeStart: number, rangeEnd: number): boolean {
   if (rangeStart < rangeEnd) {
@@ -34,12 +45,11 @@ function mergeHoursIntoShifts(
   if (hours.length === 0) return [];
   const shifts: Shift[] = [];
 
-  // Push a block, splitting at day (midnight) boundaries so startHour < endHour always.
   function pushBlock(start: number, end: number) {
     let cur = start;
     while (cur < end) {
       const day = Math.floor((cur + offset) / 24) + 1;
-      const dayEndSeq = day * 24 - offset; // seqHour where this calendar day ends
+      const dayEndSeq = day * 24 - offset;
       const blockEndInDay = Math.min(end, dayEndSeq);
 
       shifts.push({
@@ -71,15 +81,173 @@ function mergeHoursIntoShifts(
   return shifts;
 }
 
+/** Variable name for person p starting a shift at sequential hour t */
+function sVar(p: number, t: number): string {
+  return `s${p}t${t}`;
+}
+
 /**
- * Generuje harmonogram pracy z granulacją 1-godzinną.
- * Respektuje startHourOffset — harmonogram zaczyna się od podanej godziny,
- * nie od północy. Łączna liczba godzin to totalHours.
+ * Builds a CPLEX LP format MIP using shift-start variables.
  *
- * Cykl pracy: pracuj shiftHours godzin, potem obowiązkowa przerwa minBreakHours,
- * potem pracuj znowu. Limit jest per zmianę, nie per dzień kalendarzowy.
+ * Variables:
+ *   s{p}t{t} ∈ {0,1} — person p starts a full S[p]-hour shift at seq hour t
+ *   dPlus{p}, dMinus{p} ≥ 0 — deviation from target shift count
+ *
+ * A shift starting at t means person p works hours [t, t+S[p]-1].
+ *
+ * Constraints:
+ *   1. Coverage: ∀h: Σ_{(p,t): t ≤ h < t+S[p]} s[p][t] ≥ 1
+ *   2. Non-overlap + break: ∀p, ∀t: Σ_{t': t ≤ t' < t+S[p]+B[p]} s[p][t'] ≤ 1
+ *   3. Night limit: ∀ night hour h: Σ_{(p,t): t ≤ h < t+S[p]} s[p][t] ≤ maxNight
+ *   4. Target: numShifts[p] ≈ targetShifts[p]
  */
-export function generateSchedule(params: ScheduleParams): ScheduleResult {
+function buildLPModel(params: {
+  peopleCount: number;
+  totalHours: number;
+  startHourOffset: number;
+  shiftHours: number[];
+  minBreaks: number[];
+  constraints: ScheduleConstraint[];
+  nightConstraint: NightShiftLimit | null;
+  targetShifts: number[];
+  blocked: boolean[][];
+}): { lp: string; validStarts: number[][] } {
+  const { peopleCount: N, totalHours: T, startHourOffset, shiftHours, minBreaks, nightConstraint, targetShifts, blocked } = params;
+
+  // Compute valid shift start times per person
+  const validStarts: number[][] = [];
+  for (let p = 0; p < N; p++) {
+    const starts: number[] = [];
+    const S = shiftHours[p];
+    for (let t = 0; t + S <= T; t++) {
+      let valid = true;
+      for (let h = t; h < t + S; h++) {
+        if (blocked[p][h]) { valid = false; break; }
+      }
+      if (valid) starts.push(t);
+    }
+    validStarts.push(starts);
+  }
+
+  const lines: string[] = [];
+
+  // Objective: minimize total deviation from target shifts
+  lines.push('Minimize');
+  const objTerms: string[] = [];
+  for (let p = 0; p < N; p++) {
+    objTerms.push(`dPlus${p}`, `dMinus${p}`);
+  }
+  lines.push(` obj: ${objTerms.join(' + ')}`);
+
+  lines.push('Subject To');
+  let cIdx = 0;
+
+  // 1. Coverage: every hour must have at least 1 person working
+  for (let h = 0; h < T; h++) {
+    const terms: string[] = [];
+    for (let p = 0; p < N; p++) {
+      const S = shiftHours[p];
+      for (const t of validStarts[p]) {
+        if (t <= h && h < t + S) {
+          terms.push(sVar(p, t));
+        }
+      }
+    }
+    if (terms.length > 0) {
+      lines.push(` c${cIdx++}: ${terms.join(' + ')} >= 1`);
+    }
+    // If no terms, hour is uncoverable — detected after solving
+  }
+
+  // 2. Non-overlap + mandatory break: for each person, in any window of (S+B) hours,
+  //    at most 1 shift can start
+  for (let p = 0; p < N; p++) {
+    const cycle = shiftHours[p] + minBreaks[p];
+    // For each starting position of the window
+    for (let wStart = 0; wStart < T; wStart++) {
+      const wEnd = Math.min(wStart + cycle, T);
+      const terms: string[] = [];
+      for (const t of validStarts[p]) {
+        if (t >= wStart && t < wEnd) {
+          terms.push(sVar(p, t));
+        }
+      }
+      if (terms.length > 1) {
+        lines.push(` c${cIdx++}: ${terms.join(' + ')} <= 1`);
+      }
+    }
+  }
+
+  // 3. Night limit
+  if (nightConstraint) {
+    for (let h = 0; h < T; h++) {
+      const clockHour = (h + startHourOffset) % 24;
+      if (isHourInRange(clockHour, nightConstraint.nightStartHour, nightConstraint.nightEndHour)) {
+        const terms: string[] = [];
+        for (let p = 0; p < N; p++) {
+          const S = shiftHours[p];
+          for (const t of validStarts[p]) {
+            if (t <= h && h < t + S) {
+              terms.push(sVar(p, t));
+            }
+          }
+        }
+        if (terms.length > 0) {
+          lines.push(` c${cIdx++}: ${terms.join(' + ')} <= ${nightConstraint.maxPeople}`);
+        }
+      }
+    }
+  }
+
+  // 4. Target shift deviation
+  for (let p = 0; p < N; p++) {
+    if (validStarts[p].length === 0) continue;
+    const terms = validStarts[p].map(t => sVar(p, t));
+    // numShifts - dPlus <= targetShifts
+    lines.push(` c${cIdx++}: ${terms.join(' + ')} - dPlus${p} <= ${targetShifts[p]}`);
+    // -numShifts - dMinus <= -targetShifts
+    lines.push(` c${cIdx++}: - ${terms.join(' - ')} - dMinus${p} <= ${-targetShifts[p]}`);
+  }
+
+  // Bounds
+  lines.push('Bounds');
+  for (let p = 0; p < N; p++) {
+    lines.push(` 0 <= dPlus${p}`);
+    lines.push(` 0 <= dMinus${p}`);
+    for (const t of validStarts[p]) {
+      lines.push(` 0 <= ${sVar(p, t)} <= 1`);
+    }
+  }
+
+  // Integer variables
+  lines.push('General');
+  const intVars: string[] = [];
+  for (let p = 0; p < N; p++) {
+    for (const t of validStarts[p]) {
+      intVars.push(sVar(p, t));
+    }
+  }
+  if (intVars.length > 0) {
+    lines.push(` ${intVars.join(' ')}`);
+  }
+
+  lines.push('End');
+  return { lp: lines.join('\n'), validStarts };
+}
+
+/**
+ * Generuje harmonogram pracy z granulacją 1-godzinną używając solvera MIP (HiGHS).
+ *
+ * Model: zmienne binarne s[p][t] = "osoba p zaczyna zmianę o godzinie t".
+ * Każda zmiana trwa dokładnie S godzin, po niej obowiązkowa przerwa B godzin.
+ *
+ * Gwarantuje:
+ * - Optymalne rozwiązanie (lub informację o niemożliwości)
+ * - Pełne pokrycie (zawsze ktoś pracuje)
+ * - Sprawiedliwy rozkład godzin
+ * - Respektowanie wszystkich ograniczeń
+ */
+export async function generateSchedule(params: ScheduleParams): Promise<ScheduleResult> {
   const {
     peopleCount,
     totalHours,
@@ -102,181 +270,80 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
 
   const nightConstraint = constraints.find((c): c is NightShiftLimit => c.type === 'nightShiftLimit') ?? null;
 
-  // Per-person expected total hours: full cycles only, no partial shifts
-  const expectedTotalHours = shiftHours.map((s, i) => {
+  // Precompute blocked[p][t]
+  const blocked: boolean[][] = Array.from({ length: peopleCount }, (_, p) =>
+    Array.from({ length: totalHours }, (__, t) => {
+      const clockHour = (t + startHourOffset) % 24;
+      return isPersonBlockedForHour(p, clockHour, constraints);
+    })
+  );
+
+  // Target shifts per person: full cycles
+  const targetShifts = shiftHours.map((s, i) => {
     const cycle = s + minBreaks[i];
-    return Math.floor(totalHours / cycle) * s;
+    return Math.floor(totalHours / cycle);
   });
 
-  // Per-person state: shift/break cycle tracking
-  const hoursWorkedSinceBreak: number[] = new Array(peopleCount).fill(0);
-  const lastWorkEnd: number[] = new Array(peopleCount).fill(-Infinity);
+  // Build and solve MIP
+  const { lp: lpModel, validStarts } = buildLPModel({
+    peopleCount,
+    totalHours,
+    startHourOffset,
+    shiftHours,
+    minBreaks,
+    constraints,
+    nightConstraint,
+    targetShifts,
+    blocked,
+  });
+
+  const highs = await getHiGHS();
+  const solution = highs.solve(lpModel, { time_limit: 10 });
+
+  if (solution.Status === 'Infeasible') {
+    errors.push('Harmonogram jest niemożliwy do ułożenia przy zadanych ograniczeniach.');
+    return { shifts: [], valid: false, errors, coverageGaps: [], stats: personNames.map((name, i) => ({
+      personId: i, personName: name, totalWorkHours: 0, shiftsCount: 0, minBreakActual: 0,
+    }))};
+  }
+
+  if (solution.Status !== 'Optimal') {
+    errors.push(`Solver zwrócił status: ${solution.Status}. Harmonogram może być niepełny.`);
+  }
+
+  // Extract solution: work hours per person from shift starts
+  const workHoursByPerson: number[][] = Array.from({ length: peopleCount }, () => []);
   const totalWorkHoursArr: number[] = new Array(peopleCount).fill(0);
 
-  const workHoursByPerson: number[][] = Array.from({ length: peopleCount }, () => []);
-  const hourAssignments = new Map<number, Set<number>>();
-
-  function getCalendarDay(seqHour: number): number {
-    return Math.floor((seqHour + startHourOffset) / 24) + 1;
-  }
-
-  function getClockHour(seqHour: number): number {
-    return (seqHour + startHourOffset) % 24;
-  }
-
-  function canPersonWorkHour(p: number, seqHour: number): boolean {
-    const clockHour = getClockHour(seqHour);
-    const personShift = shiftHours[p];
-    const personBreak = minBreaks[p];
-
-    if (isPersonBlockedForHour(p, clockHour, constraints)) return false;
-
-    // Shift/break cycle: after working shiftHours, must rest minBreakHours
-    if (lastWorkEnd[p] !== -Infinity) {
-      const gap = seqHour - lastWorkEnd[p];
-      if (gap < personBreak && hoursWorkedSinceBreak[p] >= personShift) {
-        return false;
+  for (let p = 0; p < peopleCount; p++) {
+    const S = shiftHours[p];
+    for (const t of validStarts[p]) {
+      const col = solution.Columns[sVar(p, t)];
+      if (col && col.Primal > 0.5) {
+        for (let h = t; h < t + S; h++) {
+          workHoursByPerson[p].push(h);
+          totalWorkHoursArr[p]++;
+        }
       }
     }
-
-    // Night constraint
-    if (nightConstraint && isHourInRange(clockHour, nightConstraint.nightStartHour, nightConstraint.nightEndHour)) {
-      const assigned = hourAssignments.get(seqHour);
-      if (assigned && assigned.size >= nightConstraint.maxPeople) return false;
-    }
-
-    return true;
   }
 
-  function assignWork(p: number, seqHour: number) {
-    const personBreak = minBreaks[p];
-    if (lastWorkEnd[p] !== -Infinity) {
-      const gap = seqHour - lastWorkEnd[p];
-      if (gap >= personBreak) {
-        hoursWorkedSinceBreak[p] = 0;
-      }
-    } else {
-      hoursWorkedSinceBreak[p] = 0;
-    }
-
-    hoursWorkedSinceBreak[p]++;
-    lastWorkEnd[p] = seqHour + 1;
-    totalWorkHoursArr[p]++;
-    workHoursByPerson[p].push(seqHour);
-
-    if (!hourAssignments.has(seqHour)) {
-      hourAssignments.set(seqHour, new Set());
-    }
-    hourAssignments.get(seqHour)!.add(p);
-  }
-
-  function isNightHour(clockHour: number): boolean {
-    return !!nightConstraint && isHourInRange(clockHour, nightConstraint.nightStartHour, nightConstraint.nightEndHour);
-  }
-
-  function nightLimitReached(seqHour: number): boolean {
-    if (!nightConstraint) return false;
-    const assigned = hourAssignments.get(seqHour);
-    return !!assigned && assigned.size >= nightConstraint.maxPeople;
-  }
-
-  // Main loop: iterate exactly totalHours sequential hours
-  for (let seqHour = 0; seqHour < totalHours; seqHour++) {
-    const clockHour = getClockHour(seqHour);
-    const nightHour = isNightHour(clockHour);
-
-    const available: number[] = [];
+  // Check coverage gaps
+  for (let h = 0; h < totalHours; h++) {
+    let covered = false;
     for (let p = 0; p < peopleCount; p++) {
-      if (canPersonWorkHour(p, seqHour)) {
-        available.push(p);
+      if (workHoursByPerson[p].includes(h)) {
+        covered = true;
+        break;
       }
     }
-
-    if (available.length === 0) {
-      const assigned = hourAssignments.get(seqHour);
-      if (!assigned || assigned.size === 0) {
-        const day = getCalendarDay(seqHour);
-        coverageGaps.push({ day, startHour: clockHour, endHour: clockHour + 1 });
-      }
-      continue;
-    }
-
-    // Dynamic target: remaining expected work / remaining time
-    const remainingScheduleHours = Math.max(1, totalHours - seqHour);
-    let totalRemainingWork = 0;
-    for (let p = 0; p < peopleCount; p++) {
-      totalRemainingWork += Math.max(0, expectedTotalHours[p] - totalWorkHoursArr[p]);
-    }
-    const targetThisHour = Math.max(1, Math.ceil(totalRemainingWork / remainingScheduleHours));
-
-    // Sort: in-block first, then people who still need hours, then longest-rested, then fewest total
-    available.sort((a, b) => {
-      const aInBlock = lastWorkEnd[a] === seqHour;
-      const bInBlock = lastWorkEnd[b] === seqHour;
-      if (aInBlock !== bInBlock) return aInBlock ? -1 : 1;
-
-      // Strongly prefer people who haven't reached their expected total
-      const aReached = totalWorkHoursArr[a] >= expectedTotalHours[a];
-      const bReached = totalWorkHoursArr[b] >= expectedTotalHours[b];
-      if (aReached !== bReached) return aReached ? 1 : -1;
-
-      // Among non-in-block: prefer person available longest (break ended earliest)
-      if (!aInBlock && !bInBlock) {
-        const aAvailSince = lastWorkEnd[a] === -Infinity ? -Infinity : lastWorkEnd[a] + minBreaks[a];
-        const bAvailSince = lastWorkEnd[b] === -Infinity ? -Infinity : lastWorkEnd[b] + minBreaks[b];
-        if (aAvailSince !== bAvailSince) return aAvailSince - bAvailSince;
-      }
-
-      return totalWorkHoursArr[a] - totalWorkHoursArr[b];
-    });
-
-    // Phase 1: continue in-block people (up to target, for shift continuity)
-    // Skip people who've reached their expected total unless needed for coverage
-    let assignedThisHour = 0;
-    const assignedSet = new Set<number>();
-    for (const p of available) {
-      if (lastWorkEnd[p] !== seqHour) break; // sorted: in-block first
-      if (assignedThisHour >= targetThisHour) break;
-      if (nightHour && nightLimitReached(seqHour)) break;
-      // Don't continue block if person already reached expected total
-      // (unless they're the only option — handled by Phase 2 coverage guarantee)
-      if (totalWorkHoursArr[p] >= expectedTotalHours[p] && assignedThisHour > 0) break;
-      assignWork(p, seqHour);
-      assignedSet.add(p);
-      assignedThisHour++;
-    }
-
-    // Phase 2: start at most 1 new shift per hour (stagger to prevent herd breaks)
-    // Always start if nobody assigned yet (coverage guarantee)
-    if (assignedThisHour < targetThisHour || assignedThisHour === 0) {
-      for (const p of available) {
-        if (assignedSet.has(p)) continue; // already handled in Phase 1
-        if (nightHour && nightLimitReached(seqHour)) break;
-        // Skip people who've reached their expected total (unless nobody else assigned)
-        if (totalWorkHoursArr[p] >= expectedTotalHours[p] && assignedThisHour > 0) continue;
-        assignWork(p, seqHour);
-        assignedThisHour++;
-        break; // max 1 new start per hour
-      }
+    if (!covered) {
+      const day = Math.floor((h + startHourOffset) / 24) + 1;
+      const clockHour = (h + startHourOffset) % 24;
+      coverageGaps.push({ day, startHour: clockHour, endHour: clockHour + 1 });
     }
   }
 
-  // Check coverage
-  for (let seqHour = 0; seqHour < totalHours; seqHour++) {
-    const assigned = hourAssignments.get(seqHour);
-    if (!assigned || assigned.size === 0) {
-      const day = getCalendarDay(seqHour);
-      const clockHour = getClockHour(seqHour);
-      const alreadyGap = coverageGaps.some(
-        (g) => g.day === day && g.startHour === clockHour
-      );
-      if (!alreadyGap) {
-        coverageGaps.push({ day, startHour: clockHour, endHour: clockHour + 1 });
-      }
-    }
-  }
-
-  // Post-processing: generate errors for coverage gaps
   if (coverageGaps.length > 0) {
     errors.push(
       `Brak pokrycia w ${coverageGaps.length} godzinach — za malo osob lub zbyt dlugie przerwy.`

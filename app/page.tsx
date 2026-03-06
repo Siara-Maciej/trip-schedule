@@ -97,41 +97,48 @@ function SchedulePage() {
     try { localStorage.setItem(NIGHT_KEY, JSON.stringify(config)); } catch { /* ignoruj */ }
   }, []);
 
-  const handleSubmit = useCallback((data: DateRangeData) => {
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = useCallback(async (data: DateRangeData) => {
     if (persons.length < 2) return;
 
-    const diffMs = data.endDate.getTime() - data.startDate.getTime();
-    const totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
-    const startHourOffset = data.startDate.getHours();
-    const daysCount = Math.ceil((startHourOffset + totalHours) / 24);
+    setLoading(true);
+    try {
+      const diffMs = data.endDate.getTime() - data.startDate.getTime();
+      const totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
+      const startHourOffset = data.startDate.getHours();
+      const daysCount = Math.ceil((startHourOffset + totalHours) / 24);
 
-    const names = persons.map((p, i) => p.name.trim() || `Osoba ${i + 1}`);
-    const constraints = buildConstraints(persons, nightWork);
+      const names = persons.map((p, i) => p.name.trim() || `Osoba ${i + 1}`);
+      const constraints = buildConstraints(persons, nightWork);
 
-    const scheduleParams = {
-      peopleCount: persons.length,
-      totalHours,
-      startHourOffset,
-      names,
-      perPersonShiftHours: persons.map((p) => p.hoursPerShift),
-      perPersonMinBreak: persons.map((p) => p.minBreakHours),
-      constraints,
-    };
+      const scheduleParams = {
+        peopleCount: persons.length,
+        totalHours,
+        startHourOffset,
+        names,
+        perPersonShiftHours: persons.map((p) => p.hoursPerShift),
+        perPersonMinBreak: persons.map((p) => p.minBreakHours),
+        constraints,
+      };
 
-    console.log('[SCHEDULER INPUT]', JSON.stringify(scheduleParams, null, 2));
+      console.log('[SCHEDULER INPUT]', JSON.stringify(scheduleParams, null, 2));
 
-    const scheduleResult = generateSchedule(scheduleParams);
+      const scheduleResult = await generateSchedule(scheduleParams);
 
-    console.log('[SCHEDULER OUTPUT]', JSON.stringify(scheduleResult, null, 2));
+      console.log('[SCHEDULER OUTPUT]', JSON.stringify(scheduleResult, null, 2));
 
-    setResult(scheduleResult);
-    setDurationDays(daysCount);
-    setDateRange({
-      start: data.startDate.toLocaleString('pl-PL'),
-      end: data.endDate.toLocaleString('pl-PL'),
-    });
-    setVisible(false);
-    requestAnimationFrame(() => setVisible(true));
+      setResult(scheduleResult);
+      setDurationDays(daysCount);
+      setDateRange({
+        start: data.startDate.toLocaleString('pl-PL'),
+        end: data.endDate.toLocaleString('pl-PL'),
+      });
+      setVisible(false);
+      requestAnimationFrame(() => setVisible(true));
+    } finally {
+      setLoading(false);
+    }
   }, [persons, nightWork]);
 
   const handleExportCSV = () => {
