@@ -19,9 +19,10 @@ export interface DateRangeData {
 interface ScheduleFormProps {
   onSubmit: (data: DateRangeData) => void;
   defaultValues?: Partial<DateRangeData>;
+  loading?: boolean;
 }
 
-export function ScheduleForm({ onSubmit, defaultValues }: ScheduleFormProps) {
+export function ScheduleForm({ onSubmit, defaultValues, loading }: ScheduleFormProps) {
   const [startDate, setStartDate] = useState<Date | undefined>(defaultValues?.startDate);
   const [startTime, setStartTime] = useState(defaultValues?.startTime ?? '08:00');
   const [endDate, setEndDate] = useState<Date | undefined>(defaultValues?.endDate);
@@ -153,9 +154,20 @@ export function ScheduleForm({ onSubmit, defaultValues }: ScheduleFormProps) {
 
           {error && <p className="text-sm text-destructive">{error}</p>}
 
-          <Button type="submit" className="w-full sm:w-auto" size="lg">
-            Generuj harmonogram
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button type="submit" className="w-full sm:w-auto" size="lg" disabled={loading}>
+              Generuj harmonogram
+            </Button>
+            {loading && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Generowanie...
+              </div>
+            )}
+          </div>
         </form>
       </CardContent>
     </Card>
