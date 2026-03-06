@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, Suspense } from 'react';
+import { useState, useCallback, useRef, Suspense } from 'react';
 import { ScheduleForm, type DateRangeData } from '@/components/ScheduleForm';
 import { ScheduleTable } from '@/components/ScheduleTable';
 import { TimelineView } from '@/components/TimelineView';
@@ -97,6 +97,7 @@ function SchedulePage() {
   }, []);
 
   const [loading, setLoading] = useState(false);
+  const resultRef = useRef<HTMLDivElement>(null);
 
   const handleSubmit = useCallback(async (data: DateRangeData) => {
     if (persons.length < 2) return;
@@ -139,7 +140,12 @@ function SchedulePage() {
         end: data.endDate.toLocaleString('pl-PL'),
       });
       setVisible(false);
-      requestAnimationFrame(() => setVisible(true));
+      requestAnimationFrame(() => {
+        setVisible(true);
+        setTimeout(() => {
+          resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
+      });
     } finally {
       setLoading(false);
     }
@@ -181,7 +187,7 @@ function SchedulePage() {
           </p>
         </div>
 
-        <ScheduleForm onSubmit={handleSubmit} />
+        <ScheduleForm onSubmit={handleSubmit} loading={loading} />
 
         <PersonCreator persons={persons} onChange={handlePersonsChange} />
 
@@ -189,6 +195,7 @@ function SchedulePage() {
 
         {result && (
           <div
+            ref={resultRef}
             className={`space-y-6 transition-opacity duration-500 ${
               visible ? 'opacity-100' : 'opacity-0'
             }`}
