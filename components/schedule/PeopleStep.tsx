@@ -1,18 +1,22 @@
 'use client';
 
 import { useState } from 'react';
-import { Check, UserPlus, ArrowLeft, ChevronRight, Search } from 'lucide-react';
+import { Check, UserPlus, ArrowLeft, ChevronRight, Search, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import type { Person } from '@/types/person';
+import type { HourOverrides } from '@/types/schedule-plan';
 
 interface PeopleStepProps {
   people: Person[];
   selectedIds: string[];
+  defaultHours: number;
+  hourOverrides: HourOverrides;
   onChangeSelection: (ids: string[]) => void;
+  onChangeHourOverrides: (overrides: HourOverrides) => void;
   onBack: () => void;
   onNext: () => void;
 }
@@ -20,7 +24,10 @@ interface PeopleStepProps {
 export function PeopleStep({
   people,
   selectedIds,
+  defaultHours,
+  hourOverrides,
   onChangeSelection,
+  onChangeHourOverrides,
   onBack,
   onNext,
 }: PeopleStepProps) {
@@ -47,14 +54,29 @@ export function PeopleStep({
     onChangeSelection([]);
   };
 
+  const getHours = (personId: string): number => {
+    return hourOverrides[personId] ?? defaultHours;
+  };
+
+  const setPersonHours = (personId: string, hours: number) => {
+    if (hours === defaultHours) {
+      // Remove override — use default
+      const next = { ...hourOverrides };
+      delete next[personId];
+      onChangeHourOverrides(next);
+    } else {
+      onChangeHourOverrides({ ...hourOverrides, [personId]: hours });
+    }
+  };
+
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Wybierz osoby</CardTitle>
           <CardDescription>
-            Zaznacz pracowników, którzy mają być uwzględnieni w grafiku.
-            Wybrano: {selectedIds.length} z {people.length}
+            Zaznacz pracowników i ustaw ich budżet godzinowy.
+            Domyślnie: {defaultHours}h na okres. Wybrano: {selectedIds.length} z {people.length}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -91,45 +113,78 @@ export function PeopleStep({
               <div className="grid gap-2 sm:grid-cols-2">
                 {filtered.map((person) => {
                   const selected = selectedIds.includes(person.id);
+                  const hours = getHours(person.id);
+                  const isOverridden = person.id in hourOverrides;
+
                   return (
-                    <button
+                    <div
                       key={person.id}
-                      onClick={() => toggle(person.id)}
                       className={cn(
-                        'flex items-center gap-3 rounded-lg border p-3 text-left transition-all',
+                        'rounded-lg border transition-all',
                         selected
                           ? 'border-primary bg-primary/5 ring-1 ring-primary/20'
                           : 'border-border hover:bg-muted/50'
                       )}
                     >
-                      <div
-                        className={cn(
-                          'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-colors',
-                          selected
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-muted text-muted-foreground'
-                        )}
+                      {/* Selection row */}
+                      <button
+                        onClick={() => toggle(person.id)}
+                        className="flex w-full items-center gap-3 p-3 text-left"
                       >
-                        {selected ? (
-                          <Check className="h-4 w-4" />
-                        ) : (
-                          person.name.charAt(0).toUpperCase()
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">{person.name}</p>
-                        <div className="flex items-center gap-1.5">
-                          {person.role && (
-                            <Badge variant="secondary" className="text-xs">
-                              {person.role}
+                        <div
+                          className={cn(
+                            'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-colors',
+                            selected
+                              ? 'bg-primary text-primary-foreground'
+                              : 'bg-muted text-muted-foreground'
+                          )}
+                        >
+                          {selected ? (
+                            <Check className="h-4 w-4" />
+                          ) : (
+                            person.name.charAt(0).toUpperCase()
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium">{person.name}</p>
+                          <div className="flex items-center gap-1.5">
+                            {person.role && (
+                              <Badge variant="secondary" className="text-xs">
+                                {person.role}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* Hours override row — only when selected */}
+                      {selected && (
+                        <div className="flex items-center gap-2 border-t px-3 py-2">
+                          <Clock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <Input
+                            type="number"
+                            min={1}
+                            max={500}
+                            value={hours}
+                            onChange={(e) => setPersonHours(person.id, Number(e.target.value))}
+                            className="h-7 w-16 bg-background text-xs"
+                          />
+                          <span className="text-xs text-muted-foreground">h</span>
+                          {isOverridden && (
+                            <Badge
+                              variant="outline"
+                              className="cursor-pointer text-[10px] hover:bg-destructive/10"
+                              onClick={() => setPersonHours(person.id, defaultHours)}
+                            >
+                              reset
                             </Badge>
                           )}
-                          <span className="text-xs text-muted-foreground">
-                            {person.weeklyHours}h/tyg
-                          </span>
+                          {!isOverridden && (
+                            <span className="text-[10px] text-muted-foreground">(domyślnie)</span>
+                          )}
                         </div>
-                      </div>
-                    </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>

@@ -4,6 +4,7 @@ import type {
   WorkingHoursConfig,
   StaffConstraints,
   ShiftDefinition,
+  HourOverrides,
   PlanShift,
   PlanResult,
 } from '@/types/schedule-plan';
@@ -102,28 +103,18 @@ function compareCandidates(a: [number, number], b: [number, number]): number {
 }
 
 /**
- * Compute the total hour budget for a person across the whole period.
- * Uses the actual calendar span (not just working days count) to calculate weeks,
- * so a month with 5 calendar weeks gives 5× the weekly budget.
- */
-function computeBudget(person: Person, dates: Date[]): number {
-  if (dates.length === 0) return 0;
-  const first = dates[0].getTime();
-  const last = dates[dates.length - 1].getTime();
-  const spanDays = (last - first) / (1000 * 60 * 60 * 24) + 1;
-  const calendarWeeks = Math.max(1, Math.ceil(spanDays / 7));
-  return person.weeklyHours * calendarWeeks;
-}
-
-/**
  * Main scheduler — interleaved round-robin for required shifts,
  * then optional shifts for quota fulfilment.
+ *
+ * Hour budgets come from constraints.defaultHoursPerPeriod with
+ * optional per-person overrides (hourOverrides).
  */
 export function generatePlanSchedule(
   people: Person[],
   period: PeriodConfig,
   workingHours: WorkingHoursConfig,
   constraints: StaffConstraints,
+  hourOverrides: HourOverrides = {},
 ): PlanResult {
   const dates = getDates(period);
   const warnings: string[] = [];
@@ -139,11 +130,12 @@ export function generatePlanSchedule(
   }
 
   // ── Tracking state ──
+  const defaultBudget = constraints.defaultHoursPerPeriod ?? 160;
   const hoursUsed = new Map<string, number>();
   const hoursBudget = new Map<string, number>();
   for (const p of people) {
     hoursUsed.set(p.id, 0);
-    hoursBudget.set(p.id, computeBudget(p, dates));
+    hoursBudget.set(p.id, hourOverrides[p.id] ?? defaultBudget);
   }
 
   const lastShiftEnd = new Map<string, number>();

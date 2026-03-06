@@ -81,7 +81,12 @@ export interface StaffConstraints {
   oneShiftPerDay: boolean;
   /** If true, rotate shift types evenly across people */
   fairDistribution: boolean;
+  /** Default total hours each person should work in the selected period (e.g. 132h/month) */
+  defaultHoursPerPeriod: number;
 }
+
+/** Per-person hour budget overrides for a specific schedule run */
+export type HourOverrides = Record<string, number>; // personId → hours
 
 // ── Template (reusable preset) ──────────────────────────
 export interface ScheduleTemplate {

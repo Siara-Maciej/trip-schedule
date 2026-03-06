@@ -122,6 +122,7 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
   const [maxStaff, setMaxStaff] = useState(3);
   const [oneShiftPerDay, setOneShiftPerDay] = useState(true);
   const [fairDistribution, setFairDistribution] = useState(true);
+  const [defaultHours, setDefaultHours] = useState(160);
 
   // Template name for saving
   const [templateName, setTemplateName] = useState('');
@@ -136,6 +137,7 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
     setMaxStaff(t.constraints.maxPerShift);
     setOneShiftPerDay(t.constraints.oneShiftPerDay ?? true);
     setFairDistribution(t.constraints.fairDistribution ?? true);
+    setDefaultHours(t.constraints.defaultHoursPerPeriod ?? 160);
 
     const wh = t.workingHours;
     setHoursType(wh.type);
@@ -190,7 +192,7 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
     onNext({
       period,
       workingHours: buildWorkingHours(),
-      constraints: { minPerShift: minStaff, maxPerShift: maxStaff, oneShiftPerDay, fairDistribution },
+      constraints: { minPerShift: minStaff, maxPerShift: maxStaff, oneShiftPerDay, fairDistribution, defaultHoursPerPeriod: defaultHours },
     });
   };
 
@@ -201,7 +203,7 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
       name: templateName.trim(),
       periodType,
       workingHours: buildWorkingHours(),
-      constraints: { minPerShift: minStaff, maxPerShift: maxStaff, oneShiftPerDay, fairDistribution },
+      constraints: { minPerShift: minStaff, maxPerShift: maxStaff, oneShiftPerDay, fairDistribution, defaultHoursPerPeriod: defaultHours },
       includeWeekends,
       createdAt: new Date().toISOString(),
     };
@@ -693,9 +695,9 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
           <CardDescription>Liczba pracowników i zasady przydziału zmian</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-end gap-4">
             <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Minimum</Label>
+              <Label className="text-xs text-muted-foreground">Min. os./zmianę</Label>
               <Input
                 type="number"
                 min={1}
@@ -706,7 +708,7 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Maksimum</Label>
+              <Label className="text-xs text-muted-foreground">Maks. os./zmianę</Label>
               <Input
                 type="number"
                 min={1}
@@ -716,7 +718,24 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
                 className="w-20 bg-background"
               />
             </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Godzin/osobę w okresie</Label>
+              <div className="flex items-center gap-1.5">
+                <Input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={defaultHours}
+                  onChange={(e) => setDefaultHours(Number(e.target.value))}
+                  className="w-20 bg-background"
+                />
+                <span className="text-xs text-muted-foreground">h</span>
+              </div>
+            </div>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Domyślny budżet godzinowy na osobę (np. 160h/mies.). Można zmienić indywidualnie przy wyborze osób.
+          </p>
 
           <Separator />
 

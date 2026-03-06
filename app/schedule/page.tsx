@@ -7,7 +7,7 @@ import { PeopleStep } from '@/components/schedule/PeopleStep';
 import { ResultStep } from '@/components/schedule/ResultStep';
 import { generatePlanSchedule } from '@/lib/plan-scheduler';
 import type { Person } from '@/types/person';
-import type { ScheduleTemplate, PlanResult, WorkingHoursConfig, StaffConstraints } from '@/types/schedule-plan';
+import type { ScheduleTemplate, PlanResult, WorkingHoursConfig, StaffConstraints, HourOverrides } from '@/types/schedule-plan';
 
 const TEMPLATES_KEY = 'schedule-templates';
 const PEOPLE_KEY = 'app-people';
@@ -46,6 +46,7 @@ export default function SchedulePage() {
   // Wizard state
   const [periodData, setPeriodData] = useState<PeriodStepData | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [hourOverrides, setHourOverrides] = useState<HourOverrides>({});
   const [result, setResult] = useState<PlanResult | null>(null);
   const [workingHours, setWorkingHours] = useState<WorkingHoursConfig | null>(null);
   const [constraints, setConstraints] = useState<StaffConstraints | null>(null);
@@ -67,6 +68,7 @@ export default function SchedulePage() {
       periodData.period,
       periodData.workingHours,
       periodData.constraints,
+      hourOverrides,
     );
     setResult(res);
     setStep(2);
@@ -76,6 +78,7 @@ export default function SchedulePage() {
     setStep(0);
     setPeriodData(null);
     setSelectedIds([]);
+    setHourOverrides({});
     setResult(null);
   };
 
@@ -100,11 +103,14 @@ export default function SchedulePage() {
           />
         )}
 
-        {step === 1 && (
+        {step === 1 && periodData && (
           <PeopleStep
             people={people}
             selectedIds={selectedIds}
+            defaultHours={periodData.constraints.defaultHoursPerPeriod}
+            hourOverrides={hourOverrides}
             onChangeSelection={setSelectedIds}
+            onChangeHourOverrides={setHourOverrides}
             onBack={() => setStep(0)}
             onNext={handlePeopleNext}
           />
