@@ -9,7 +9,6 @@ import { CoverageAlert } from '@/components/CoverageAlert';
 import { ConstraintsEditor, type NightWorkConfig } from '@/components/ConstraintsEditor';
 import { PersonCreator } from '@/components/PersonCreator';
 import { Button } from '@/components/ui/button';
-import { generateSchedule } from '@/lib/scheduler';
 import { generateCSV, downloadCSV } from '@/lib/csv-export';
 import { downloadPDF } from '@/lib/pdf-export';
 import type { ScheduleResult, ScheduleConstraint, PersonConfig } from '@/types/schedule';
@@ -124,7 +123,12 @@ function SchedulePage() {
 
       console.log('[SCHEDULER INPUT]', JSON.stringify(scheduleParams, null, 2));
 
-      const scheduleResult = await generateSchedule(scheduleParams);
+      const res = await fetch('/api/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(scheduleParams),
+      });
+      const scheduleResult: ScheduleResult = await res.json();
 
       console.log('[SCHEDULER OUTPUT]', JSON.stringify(scheduleResult, null, 2));
 
