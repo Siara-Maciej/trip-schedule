@@ -10,6 +10,8 @@ import {
   Trash2,
   Save,
   RotateCcw,
+  Check,
+  Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -281,29 +283,78 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
               <RotateCcw className="h-4 w-4" />
               Zapisane szablony
             </CardTitle>
-            <CardDescription>Użyj wcześniej zapisanej konfiguracji</CardDescription>
+            <CardDescription>Wybierz szablon, aby załadować konfigurację</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-wrap gap-2">
-              {templates.map((t) => (
-                <div key={t.id} className="flex items-center gap-1">
-                  <Badge
-                    variant={selectedTemplateId === t.id ? 'default' : 'outline'}
-                    className="cursor-pointer select-none px-3 py-1.5"
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {templates.map((t) => {
+                const isSelected = selectedTemplateId === t.id;
+                const periodLabel = PERIOD_OPTIONS.find((p) => p.value === t.periodType)?.label ?? t.periodType;
+                const hoursLabel = HOURS_OPTIONS.find((h) => h.value === t.workingHours.type)?.label ?? t.workingHours.type;
+
+                let hoursDetail = '';
+                if (t.workingHours.type === 'fixed') {
+                  hoursDetail = `${t.workingHours.startTime} – ${t.workingHours.endTime}`;
+                } else if (t.workingHours.type === 'shifts') {
+                  hoursDetail = t.workingHours.shifts.map((s) => s.name).join(', ');
+                }
+
+                return (
+                  <button
+                    key={t.id}
                     onClick={() => applyTemplate(t)}
+                    className={cn(
+                      'group relative rounded-lg border p-4 text-left transition-all',
+                      isSelected
+                        ? 'border-primary bg-primary/5 ring-1 ring-primary/20'
+                        : 'border-border hover:border-primary/40 hover:bg-muted/50'
+                    )}
                   >
-                    {t.name}
-                  </Badge>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 text-muted-foreground hover:text-destructive"
-                    onClick={() => onDeleteTemplate(t.id)}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
-                </div>
-              ))}
+                    {isSelected && (
+                      <div className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-primary">
+                        <Check className="h-3 w-3 text-primary-foreground" />
+                      </div>
+                    )}
+
+                    <p className="pr-6 text-sm font-semibold">{t.name}</p>
+
+                    <div className="mt-2 space-y-1">
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <CalendarRange className="h-3 w-3 shrink-0" />
+                        <span>{periodLabel}</span>
+                        {t.includeWeekends && (
+                          <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px]">+weekend</Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Clock className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{hoursLabel}{hoursDetail ? ` · ${hoursDetail}` : ''}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Users className="h-3 w-3 shrink-0" />
+                        <span>{t.constraints.minPerShift}–{t.constraints.maxPerShift} os./zmianę</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex items-center justify-between">
+                      <span className="text-[10px] text-muted-foreground/60">
+                        {new Date(t.createdAt).toLocaleDateString('pl-PL')}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteTemplate(t.id);
+                        }}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </CardContent>
         </Card>
