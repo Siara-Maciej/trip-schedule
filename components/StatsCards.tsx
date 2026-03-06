@@ -9,19 +9,20 @@ interface StatsCardsProps {
   hoursPerShift: number;
 }
 
-export function StatsCards({ result, durationDays, hoursPerShift }: StatsCardsProps) {
-  const shiftsPerDay = Math.floor(24 / hoursPerShift);
-  const totalExpectedHours = durationDays * shiftsPerDay * hoursPerShift;
-  const totalActualHours = result.stats.reduce((sum, s) => sum + s.totalWorkHours, 0);
-  const coveragePercent = totalExpectedHours > 0
-    ? Math.round((totalActualHours / totalExpectedHours) * 100)
+export function StatsCards({ result, durationDays }: StatsCardsProps) {
+  const totalHours = durationDays * 24;
+  const coveredHours = totalHours - result.coverageGaps.length;
+  const coveragePercent = totalHours > 0
+    ? Math.round((coveredHours / totalHours) * 100)
     : 0;
 
+  const totalWorkHours = result.stats.reduce((sum, s) => sum + s.totalWorkHours, 0);
+
   const statsItems = [
-    { label: 'Pokrycie', value: `${coveragePercent}%`, color: coveragePercent === 100 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400' },
+    { label: 'Pokrycie godzin', value: `${coveragePercent}%`, color: coveragePercent === 100 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400' },
     { label: 'Osoby', value: `${result.stats.length}` },
-    { label: 'Łącznie godzin', value: `${totalActualHours}h` },
-    { label: 'Zmian łącznie', value: `${result.shifts.length}` },
+    { label: 'Łącznie roboczogodzin', value: `${totalWorkHours}h` },
+    { label: 'Bloków pracy', value: `${result.shifts.length}` },
   ];
 
   return (

@@ -1,102 +1,177 @@
 'use client';
 
 import { useState, useCallback, Suspense } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
-import { ScheduleForm } from '@/components/ScheduleForm';
+import { ScheduleForm, type DateRangeData } from '@/components/ScheduleForm';
 import { ScheduleTable } from '@/components/ScheduleTable';
 import { TimelineView } from '@/components/TimelineView';
 import { StatsCards } from '@/components/StatsCards';
 import { CoverageAlert } from '@/components/CoverageAlert';
+import { ConstraintsEditor, type NightWorkConfig } from '@/components/ConstraintsEditor';
+import { PersonCreator } from '@/components/PersonCreator';
 import { Button } from '@/components/ui/button';
-import { generateSchedule } from '@/lib/scheduler';
 import { generateCSV, downloadCSV } from '@/lib/csv-export';
-import type { ScheduleFormData } from '@/lib/validation';
-import type { ScheduleResult } from '@/types/schedule';
+import { downloadPDF } from '@/lib/pdf-export';
+import type { ScheduleResult, ScheduleConstraint, PersonConfig } from '@/types/schedule';
 
-const STORAGE_KEY = 'schedule-params';
+const PERSONS_KEY = 'schedule-persons';
+const NIGHT_KEY = 'schedule-night';
 
-function getDefaultValues(): Partial<ScheduleFormData> {
-  if (typeof window === 'undefined') return {};
+function getStoredPersons(): PersonConfig[] {
+  if (typeof window === 'undefined') return [];
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) return JSON.parse(stored);
-  } catch {
-    // ignoruj błędy localStorage
+    const stored = localStorage.getItem(PERSONS_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch { /* ignoruj */ }
+  return [];
+}
+
+function getStoredNight(): NightWorkConfig {
+  if (typeof window === 'undefined') return { enabled: false, nightStartHour: 22, nightEndHour: 6, maxNightPeople: 1 };
+  try {
+    const stored = localStorage.getItem(NIGHT_KEY);
+    if (stored) return { maxNightPeople: 1, ...JSON.parse(stored) };
+  } catch { /* ignoruj */ }
+  return { enabled: false, nightStartHour: 22, nightEndHour: 6, maxNightPeople: 1 };
+}
+
+function buildConstraints(
+  persons: PersonConfig[],
+  nightWork: NightWorkConfig,
+): ScheduleConstraint[] {
+  const constraints: ScheduleConstraint[] = [];
+
+  if (nightWork.enabled) {
+    constraints.push({
+      type: 'nightShiftLimit',
+      maxPeople: nightWork.maxNightPeople,
+      nightStartHour: nightWork.nightStartHour,
+      nightEndHour: nightWork.nightEndHour,
+    });
+
+    for (let i = 0; i < persons.length; i++) {
+      if (!persons[i].canWorkAtNight) {
+        constraints.push({
+          type: 'personBlocked',
+          personId: i,
+          startHour: nightWork.nightStartHour,
+          endHour: nightWork.nightEndHour,
+        });
+      }
+    }
   }
-  return {};
+
+  for (let i = 0; i < persons.length; i++) {
+    const p = persons[i];
+    if (p.blockedHours) {
+      constraints.push({
+        type: 'personBlocked',
+        personId: i,
+        startHour: p.blockedHours.startHour,
+        endHour: p.blockedHours.endHour,
+      });
+    }
+  }
+
+  return constraints;
 }
 
 function SchedulePage() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
   const [result, setResult] = useState<ScheduleResult | null>(null);
-  const [params, setParams] = useState<ScheduleFormData | null>(null);
+  const [durationDays, setDurationDays] = useState(0);
+  const [dateRange, setDateRange] = useState<{ start: string; end: string } | null>(null);
   const [visible, setVisible] = useState(false);
+  const [persons, setPersons] = useState<PersonConfig[]>(getStoredPersons);
+  const [nightWork, setNightWork] = useState<NightWorkConfig>(getStoredNight);
 
-  // Wczytaj parametry z URL lub localStorage
-  const defaultValues: Partial<ScheduleFormData> = (() => {
-    const fromUrl: Partial<ScheduleFormData> = {};
-    const p = searchParams.get('people');
-    const h = searchParams.get('hours');
-    const d = searchParams.get('days');
-    const b = searchParams.get('break');
-    const n = searchParams.get('names');
-    if (p) fromUrl.peopleCount = Number(p);
-    if (h) fromUrl.hoursPerShift = Number(h);
-    if (d) fromUrl.durationDays = Number(d);
-    if (b) fromUrl.minBreakHours = Number(b);
-    if (n) fromUrl.customNames = n;
+  const handlePersonsChange = useCallback((newPersons: PersonConfig[]) => {
+    setPersons(newPersons);
+    try { localStorage.setItem(PERSONS_KEY, JSON.stringify(newPersons)); } catch { /* ignoruj */ }
+  }, []);
 
-    if (Object.keys(fromUrl).length > 0) return fromUrl;
-    return getDefaultValues();
-  })();
+  const handleNightChange = useCallback((config: NightWorkConfig) => {
+    setNightWork(config);
+    try { localStorage.setItem(NIGHT_KEY, JSON.stringify(config)); } catch { /* ignoruj */ }
+  }, []);
 
-  const handleSubmit = useCallback((data: ScheduleFormData) => {
-    // Zapisz do localStorage
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = useCallback(async (data: DateRangeData) => {
+    if (persons.length < 2) return;
+
+    setLoading(true);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch {
-      // ignoruj
+      const diffMs = data.endDate.getTime() - data.startDate.getTime();
+      const totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
+      const startHourOffset = data.startDate.getHours();
+      const daysCount = Math.ceil((startHourOffset + totalHours) / 24);
+
+      const names = persons.map((p, i) => p.name.trim() || `Osoba ${i + 1}`);
+      const constraints = buildConstraints(persons, nightWork);
+
+      const scheduleParams = {
+        peopleCount: persons.length,
+        totalHours,
+        startHourOffset,
+        names,
+        perPersonShiftHours: persons.map((p) => p.hoursPerShift),
+        perPersonMinBreak: persons.map((p) => p.minBreakHours),
+        constraints,
+      };
+
+      console.log('[SCHEDULER INPUT]', JSON.stringify(scheduleParams, null, 2));
+
+      const res = await fetch('/api/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(scheduleParams),
+      });
+      const scheduleResult: ScheduleResult = await res.json();
+
+      console.log('[SCHEDULER OUTPUT]', JSON.stringify(scheduleResult, null, 2));
+
+      setResult(scheduleResult);
+      setDurationDays(daysCount);
+      setDateRange({
+        start: data.startDate.toLocaleString('pl-PL'),
+        end: data.endDate.toLocaleString('pl-PL'),
+      });
+      setVisible(false);
+      requestAnimationFrame(() => setVisible(true));
+    } finally {
+      setLoading(false);
     }
-
-    // Zaktualizuj URL
-    const urlParams = new URLSearchParams();
-    urlParams.set('people', String(data.peopleCount));
-    urlParams.set('hours', String(data.hoursPerShift));
-    urlParams.set('days', String(data.durationDays));
-    urlParams.set('break', String(data.minBreakHours));
-    if (data.customNames) urlParams.set('names', data.customNames);
-    router.replace(`?${urlParams.toString()}`, { scroll: false });
-
-    // Parsuj imiona
-    const names = data.customNames
-      ? data.customNames.split(',').map((n) => n.trim()).filter(Boolean)
-      : [];
-
-    const scheduleResult = generateSchedule({
-      peopleCount: data.peopleCount,
-      hoursPerShift: data.hoursPerShift,
-      durationDays: data.durationDays,
-      minBreakHours: data.minBreakHours,
-      names,
-    });
-
-    setResult(scheduleResult);
-    setParams(data);
-    setVisible(false);
-    requestAnimationFrame(() => setVisible(true));
-  }, [router]);
+  }, [persons, nightWork]);
 
   const handleExportCSV = () => {
-    if (!result || !params) return;
-    const csv = generateCSV(result, params.durationDays, params.hoursPerShift);
-    downloadCSV(csv, `harmonogram-${params.durationDays}dni.csv`);
+    if (!result) return;
+    const csv = generateCSV(result, durationDays);
+    downloadCSV(csv, `harmonogram-${durationDays}dni.csv`);
   };
+
+  const handleExportPDF = () => {
+    if (!result) return;
+    downloadPDF(
+      {
+        result,
+        durationDays,
+        persons,
+        startDate: dateRange?.start,
+        endDate: dateRange?.end,
+      },
+      `harmonogram-${durationDays}dni.pdf`,
+    );
+  };
+
+  const avgShift = persons.length > 0
+    ? Math.round(persons.reduce((s, p) => s + p.hoursPerShift, 0) / persons.length)
+    : 8;
 
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-7xl mx-auto px-4 py-8 space-y-8">
-        {/* Nagłówek */}
         <div className="text-center space-y-2">
           <h1 className="text-3xl font-bold tracking-tight">
             Generator Harmonogramu Pracy
@@ -106,11 +181,13 @@ function SchedulePage() {
           </p>
         </div>
 
-        {/* Formularz */}
-        <ScheduleForm onSubmit={handleSubmit} defaultValues={defaultValues} />
+        <ScheduleForm onSubmit={handleSubmit} />
 
-        {/* Wyniki */}
-        {result && params && (
+        <PersonCreator persons={persons} onChange={handlePersonsChange} />
+
+        <ConstraintsEditor nightWork={nightWork} onChange={handleNightChange} />
+
+        {result && (
           <div
             className={`space-y-6 transition-opacity duration-500 ${
               visible ? 'opacity-100' : 'opacity-0'
@@ -120,26 +197,29 @@ function SchedulePage() {
 
             <StatsCards
               result={result}
-              durationDays={params.durationDays}
-              hoursPerShift={params.hoursPerShift}
+              durationDays={durationDays}
+              hoursPerShift={avgShift}
             />
 
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={handleExportCSV}>
                 Pobierz CSV
+              </Button>
+              <Button variant="outline" onClick={handleExportPDF}>
+                Pobierz PDF
               </Button>
             </div>
 
             <ScheduleTable
               result={result}
-              durationDays={params.durationDays}
-              hoursPerShift={params.hoursPerShift}
+              durationDays={durationDays}
+              hoursPerShift={avgShift}
             />
 
             <TimelineView
               result={result}
-              durationDays={params.durationDays}
-              hoursPerShift={params.hoursPerShift}
+              durationDays={durationDays}
+              hoursPerShift={avgShift}
             />
           </div>
         )}
