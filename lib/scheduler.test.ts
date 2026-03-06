@@ -57,18 +57,36 @@ describe('scheduler — granulacja 1h', () => {
     }
   });
 
-  test('każda osoba pracuje max hoursPerShift godzin dziennie', () => {
+  test('każda osoba pracuje max hoursPerShift godzin per zmianę (między przerwami)', () => {
     const hoursPerShift = 8;
+    const minBreakHours = 8;
     const result = generateSchedule({
       peopleCount: 4,
       totalHours: 24 * 3,
-      ...uniformParams(4, hoursPerShift, 8),
+      ...uniformParams(4, hoursPerShift, minBreakHours),
     });
 
-    for (let day = 1; day <= 3; day++) {
-      for (let p = 0; p < 4; p++) {
-        const hours = getPersonHoursPerDay(result, p, day);
-        expect(hours.length).toBeLessThanOrEqual(hoursPerShift);
+    // Verify per-shift limit: between adequate breaks, max hoursPerShift worked
+    for (let p = 0; p < 4; p++) {
+      const allHours: number[] = [];
+      for (const shift of result.shifts) {
+        if (shift.personId === p) {
+          for (let h = shift.startHour; h < shift.endHour; h++) {
+            allHours.push((shift.day - 1) * 24 + h);
+          }
+        }
+      }
+      allHours.sort((a, b) => a - b);
+
+      let accumulated = 0;
+      let lastEnd = -Infinity;
+      for (const hour of allHours) {
+        if (hour - lastEnd >= minBreakHours) {
+          accumulated = 0;
+        }
+        accumulated++;
+        lastEnd = hour + 1;
+        expect(accumulated).toBeLessThanOrEqual(hoursPerShift);
       }
     }
   });
@@ -233,7 +251,7 @@ describe('scheduler — granulacja 1h', () => {
 
   // --- Per-person params ---
 
-  test('per-person shift durations: different shift lengths', () => {
+  test('per-person shift durations: each shift respects per-person limit', () => {
     const result = generateSchedule({
       peopleCount: 3,
       totalHours: 24 * 2,
@@ -241,10 +259,30 @@ describe('scheduler — granulacja 1h', () => {
       perPersonMinBreak: [6, 8, 10],
     });
 
-    for (let day = 1; day <= 2; day++) {
-      expect(getPersonHoursPerDay(result, 0, day).length).toBeLessThanOrEqual(6);
-      expect(getPersonHoursPerDay(result, 1, day).length).toBeLessThanOrEqual(8);
-      expect(getPersonHoursPerDay(result, 2, day).length).toBeLessThanOrEqual(10);
+    // Verify each person's shifts don't exceed their shift duration
+    const shiftLimits = [6, 8, 10];
+    const breakLimits = [6, 8, 10];
+    for (let p = 0; p < 3; p++) {
+      const allHours: number[] = [];
+      for (const shift of result.shifts) {
+        if (shift.personId === p) {
+          for (let h = shift.startHour; h < shift.endHour; h++) {
+            allHours.push((shift.day - 1) * 24 + h);
+          }
+        }
+      }
+      allHours.sort((a, b) => a - b);
+
+      let accumulated = 0;
+      let lastEnd = -Infinity;
+      for (const hour of allHours) {
+        if (hour - lastEnd >= breakLimits[p]) {
+          accumulated = 0;
+        }
+        accumulated++;
+        lastEnd = hour + 1;
+        expect(accumulated).toBeLessThanOrEqual(shiftLimits[p]);
+      }
     }
   });
 
@@ -272,6 +310,26 @@ describe('scheduler — granulacja 1h', () => {
       for (const h of hours) {
         expect(h).toBeLessThan(14);
       }
+    }
+  });
+
+  test('partial last day: everyone gets full shift hours even if schedule ends early', () => {
+    // Simulates: start 02:00, end 21:00 three days later (91 hours)
+    // 4 people, 8h shifts, 11h breaks, night 00-08 max 1 person
+    const result = generateSchedule({
+      peopleCount: 4,
+      totalHours: 91,
+      startHourOffset: 2,
+      ...uniformParams(4, 8, 11),
+      constraints: [
+        { type: 'nightShiftLimit', maxPeople: 1, nightStartHour: 0, nightEndHour: 8 },
+      ],
+    });
+
+    // Each person should work at least 4 shifts × 8h = 32h total
+    for (let p = 0; p < 4; p++) {
+      const totalHours = result.stats[p].totalWorkHours;
+      expect(totalHours).toBeGreaterThanOrEqual(32);
     }
   });
 });

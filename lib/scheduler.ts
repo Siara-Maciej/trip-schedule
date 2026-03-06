@@ -72,6 +72,9 @@ function mergeHoursIntoShifts(
  * Generuje harmonogram pracy z granulacją 1-godzinną.
  * Respektuje startHourOffset — harmonogram zaczyna się od podanej godziny,
  * nie od północy. Łączna liczba godzin to totalHours.
+ *
+ * Cykl pracy: pracuj shiftHours godzin, potem obowiązkowa przerwa minBreakHours,
+ * potem pracuj znowu. Limit jest per zmianę, nie per dzień kalendarzowy.
  */
 export function generateSchedule(params: ScheduleParams): ScheduleResult {
   const {
@@ -96,15 +99,13 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
 
   const nightConstraint = constraints.find((c): c is NightShiftLimit => c.type === 'nightShiftLimit') ?? null;
 
+  // Per-person state: shift/break cycle tracking
   const hoursWorkedSinceBreak: number[] = new Array(peopleCount).fill(0);
   const lastWorkEnd: number[] = new Array(peopleCount).fill(-Infinity);
   const totalWorkHoursArr: number[] = new Array(peopleCount).fill(0);
 
   const workHoursByPerson: number[][] = Array.from({ length: peopleCount }, () => []);
   const hourAssignments = new Map<number, Set<number>>();
-
-  // Track per-calendar-day work hours for shift limits
-  const hoursWorkedPerDay: Map<string, number>[] = Array.from({ length: peopleCount }, () => new Map());
 
   function getCalendarDay(seqHour: number): number {
     return Math.floor((seqHour + startHourOffset) / 24) + 1;
@@ -114,24 +115,14 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
     return (seqHour + startHourOffset) % 24;
   }
 
-  function getDayKey(seqHour: number): string {
-    return String(getCalendarDay(seqHour));
-  }
-
-  function getHoursWorkedToday(p: number, seqHour: number): number {
-    return hoursWorkedPerDay[p].get(getDayKey(seqHour)) ?? 0;
-  }
-
   function canPersonWorkHour(p: number, seqHour: number): boolean {
     const clockHour = getClockHour(seqHour);
     const personShift = shiftHours[p];
     const personBreak = minBreaks[p];
-    const workedToday = getHoursWorkedToday(p, seqHour);
-
-    if (workedToday >= personShift) return false;
 
     if (isPersonBlockedForHour(p, clockHour, constraints)) return false;
 
+    // Shift/break cycle: after working shiftHours, must rest minBreakHours
     if (lastWorkEnd[p] !== -Infinity) {
       const gap = seqHour - lastWorkEnd[p];
       if (gap < personBreak && hoursWorkedSinceBreak[p] >= personShift) {
@@ -139,6 +130,7 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
       }
     }
 
+    // Night constraint
     if (nightConstraint && isHourInRange(clockHour, nightConstraint.nightStartHour, nightConstraint.nightEndHour)) {
       const assigned = hourAssignments.get(seqHour);
       if (assigned && assigned.size >= nightConstraint.maxPeople) return false;
@@ -163,9 +155,6 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
     totalWorkHoursArr[p]++;
     workHoursByPerson[p].push(seqHour);
 
-    const dayKey = getDayKey(seqHour);
-    hoursWorkedPerDay[p].set(dayKey, (hoursWorkedPerDay[p].get(dayKey) ?? 0) + 1);
-
     if (!hourAssignments.has(seqHour)) {
       hourAssignments.set(seqHour, new Set());
     }
@@ -173,26 +162,7 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
   }
 
   // Main loop: iterate exactly totalHours sequential hours
-  // Group by calendar day for daily shift accounting
-  let currentDay = getCalendarDay(0);
-  const workedToday: boolean[] = new Array(peopleCount).fill(false);
-
   for (let seqHour = 0; seqHour < totalHours; seqHour++) {
-    const day = getCalendarDay(seqHour);
-
-    // Reset daily tracking when day changes
-    if (day !== currentDay) {
-      for (let p = 0; p < peopleCount; p++) {
-        if (!workedToday[p]) {
-          errors.push(
-            `${personNames[p]} nie ma przydzielonej pracy w dniu ${currentDay} — brak dostępnych godzin (przerwa/ograniczenia).`
-          );
-        }
-        workedToday[p] = false;
-      }
-      currentDay = day;
-    }
-
     const available: number[] = [];
     for (let p = 0; p < peopleCount; p++) {
       if (canPersonWorkHour(p, seqHour)) {
@@ -200,37 +170,44 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
       }
     }
 
-    // Calculate target workers this hour
-    // Count remaining day hours (in this calendar day within schedule range)
-    let remainingDayHoursInSchedule = 0;
-    for (let fh = seqHour; fh < totalHours && getCalendarDay(fh) === day; fh++) {
-      remainingDayHoursInSchedule++;
-    }
-    let remainingPersonHours = 0;
+    // Calculate target workers: estimate total remaining work across the schedule
+    const remainingScheduleHours = Math.max(1, totalHours - seqHour);
+    let totalRemainingWork = 0;
     for (let p = 0; p < peopleCount; p++) {
-      remainingPersonHours += Math.max(0, shiftHours[p] - getHoursWorkedToday(p, seqHour));
+      const currentShiftRemaining = Math.max(0, shiftHours[p] - hoursWorkedSinceBreak[p]);
+      const timeAfterCurrent = Math.max(0, remainingScheduleHours - currentShiftRemaining);
+      const cycleLen = shiftHours[p] + minBreaks[p];
+      const futureCycles = cycleLen > 0 ? Math.floor(timeAfterCurrent / cycleLen) : 0;
+      const futureWork = futureCycles * shiftHours[p];
+      const leftover = timeAfterCurrent - futureCycles * cycleLen;
+      const leftoverWork = leftover > minBreaks[p]
+        ? Math.min(leftover - minBreaks[p], shiftHours[p])
+        : 0;
+      totalRemainingWork += currentShiftRemaining + futureWork + leftoverWork;
     }
-    const targetThisHour = Math.max(1, Math.ceil(remainingPersonHours / Math.max(1, remainingDayHoursInSchedule)));
+    const targetThisHour = Math.max(1, Math.ceil(totalRemainingWork / remainingScheduleHours));
 
     if (available.length === 0) {
       const assigned = hourAssignments.get(seqHour);
       if (!assigned || assigned.size === 0) {
+        const day = getCalendarDay(seqHour);
         coverageGaps.push({ day, startHour: getClockHour(seqHour), endHour: getClockHour(seqHour) + 1 });
       }
       continue;
     }
 
     available.sort((a, b) => {
+      // 1. Continue current work block (shift continuity)
       const aInBlock = lastWorkEnd[a] === seqHour;
       const bInBlock = lastWorkEnd[b] === seqHour;
       if (aInBlock !== bInBlock) return aInBlock ? -1 : 1;
 
-      if (workedToday[a] !== workedToday[b]) return workedToday[a] ? 1 : -1;
+      // 2. Prefer person with more remaining capacity in current shift
+      const aRemaining = shiftHours[a] - hoursWorkedSinceBreak[a];
+      const bRemaining = shiftHours[b] - hoursWorkedSinceBreak[b];
+      if (aRemaining !== bRemaining) return bRemaining - aRemaining;
 
-      const aToday = getHoursWorkedToday(a, seqHour);
-      const bToday = getHoursWorkedToday(b, seqHour);
-      if (aToday !== bToday) return aToday - bToday;
-
+      // 3. Balance total hours across people
       return totalWorkHoursArr[a] - totalWorkHoursArr[b];
     });
 
@@ -245,16 +222,6 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
       }
 
       assignWork(p, seqHour);
-      workedToday[p] = true;
-    }
-  }
-
-  // Check last day's workers
-  for (let p = 0; p < peopleCount; p++) {
-    if (!workedToday[p]) {
-      errors.push(
-        `${personNames[p]} nie ma przydzielonej pracy w dniu ${currentDay} — brak dostępnych godzin (przerwa/ograniczenia).`
-      );
     }
   }
 
@@ -271,6 +238,13 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
         coverageGaps.push({ day, startHour: clockHour, endHour: clockHour + 1 });
       }
     }
+  }
+
+  // Post-processing: generate errors for coverage gaps
+  if (coverageGaps.length > 0) {
+    errors.push(
+      `Brak pokrycia w ${coverageGaps.length} godzinach — za malo osob lub zbyt dlugie przerwy.`
+    );
   }
 
   // Merge hours into shifts
