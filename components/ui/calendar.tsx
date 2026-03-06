@@ -22,16 +22,16 @@ function Calendar({
       classNames={{
         months: "flex flex-col sm:flex-row gap-2",
         month: "flex flex-col gap-4",
-        month_caption: "flex justify-center pt-1 relative items-center w-full",
-        caption_label: "text-sm font-medium",
-        nav: "flex items-center gap-1",
+        month_caption: "flex justify-center pt-1 relative items-center w-full z-30",
+        caption_label: "text-sm font-medium pointer-events-none",
+        nav: "flex items-center gap-1 z-30",
         button_previous: cn(
           buttonVariants({ variant: "outline" }),
-          "absolute left-1 top-0 h-7 w-7 bg-transparent p-0 opacity-50 hover:opacity-100"
+          "absolute left-1 top-0 h-7 w-7 bg-transparent p-0 opacity-50 hover:opacity-100 z-30"
         ),
         button_next: cn(
           buttonVariants({ variant: "outline" }),
-          "absolute right-1 top-0 h-7 w-7 bg-transparent p-0 opacity-50 hover:opacity-100"
+          "absolute right-1 top-0 h-7 w-7 bg-transparent p-0 opacity-50 hover:opacity-100 z-30"
         ),
         month_grid: "w-full border-collapse space-x-1",
         weekdays: "flex",
