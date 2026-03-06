@@ -65,12 +65,12 @@ function getMonday(d: Date): Date {
   return date;
 }
 
-function defaultShift(): ShiftDefinition {
-  return { name: 'Zmiana', startTime: '08:00', endTime: '16:00' };
+function defaultShift(required = true): ShiftDefinition {
+  return { name: 'Zmiana', startTime: '08:00', endTime: '16:00', required, minPerPersonInPeriod: 0 };
 }
 
 function defaultDayConfig(): DayConfig {
-  return { enabled: true, shifts: [{ name: 'Zmiana', startTime: '08:00', endTime: '16:00' }] };
+  return { enabled: true, shifts: [defaultShift()] };
 }
 
 // ── Component ──────────────────────────────────────────
@@ -108,8 +108,8 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
   const [fixedStart, setFixedStart] = useState('08:00');
   const [fixedEnd, setFixedEnd] = useState('20:00');
   const [shifts, setShifts] = useState<ShiftDefinition[]>([
-    { name: 'Zmiana I', startTime: '07:00', endTime: '15:00' },
-    { name: 'Zmiana II', startTime: '12:00', endTime: '20:00' },
+    { name: 'Zmiana I', startTime: '07:00', endTime: '15:00', required: true, minPerPersonInPeriod: 0 },
+    { name: 'Zmiana II', startTime: '12:00', endTime: '20:00', required: true, minPerPersonInPeriod: 0 },
   ]);
   const [customDays, setCustomDays] = useState<Record<number, DayConfig>>(() => {
     const days: Record<number, DayConfig> = {};
@@ -215,54 +215,103 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
     shiftList: ShiftDefinition[],
     onChange: (list: ShiftDefinition[]) => void,
   ) => (
-    <div className="space-y-2">
-      {shiftList.map((s, i) => (
-        <div key={i} className="flex flex-wrap items-center gap-2">
-          <Input
-            value={s.name}
-            onChange={(e) => {
-              const copy = [...shiftList];
-              copy[i] = { ...copy[i], name: e.target.value };
-              onChange(copy);
-            }}
-            className="w-full bg-background sm:w-32"
-            placeholder="Nazwa"
-          />
-          <div className="flex items-center gap-2">
-            <Input
-              type="time"
-              value={s.startTime}
-              onChange={(e) => {
-                const copy = [...shiftList];
-                copy[i] = { ...copy[i], startTime: e.target.value };
-                onChange(copy);
-              }}
-              className="w-28 bg-background"
-            />
-            <span className="text-muted-foreground">—</span>
-            <Input
-              type="time"
-              value={s.endTime}
-              onChange={(e) => {
-                const copy = [...shiftList];
-                copy[i] = { ...copy[i], endTime: e.target.value };
-                onChange(copy);
-              }}
-              className="w-28 bg-background"
-            />
-            {shiftList.length > 1 && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 shrink-0 text-destructive"
-                onClick={() => onChange(shiftList.filter((_, j) => j !== i))}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            )}
+    <div className="space-y-3">
+      {shiftList.map((s, i) => {
+        const isRequired = s.required ?? true;
+        return (
+          <div key={i} className="rounded-lg border p-3 space-y-2">
+            {/* Row 1: Name + times + delete */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                value={s.name}
+                onChange={(e) => {
+                  const copy = [...shiftList];
+                  copy[i] = { ...copy[i], name: e.target.value };
+                  onChange(copy);
+                }}
+                className="w-full bg-background sm:w-32"
+                placeholder="Nazwa"
+              />
+              <div className="flex items-center gap-2">
+                <Input
+                  type="time"
+                  value={s.startTime}
+                  onChange={(e) => {
+                    const copy = [...shiftList];
+                    copy[i] = { ...copy[i], startTime: e.target.value };
+                    onChange(copy);
+                  }}
+                  className="w-28 bg-background"
+                />
+                <span className="text-muted-foreground">—</span>
+                <Input
+                  type="time"
+                  value={s.endTime}
+                  onChange={(e) => {
+                    const copy = [...shiftList];
+                    copy[i] = { ...copy[i], endTime: e.target.value };
+                    onChange(copy);
+                  }}
+                  className="w-28 bg-background"
+                />
+                {shiftList.length > 1 && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0 text-destructive"
+                    onClick={() => onChange(shiftList.filter((_, j) => j !== i))}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {/* Row 2: Required/Optional toggle + quota */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={isRequired}
+                  onCheckedChange={(v) => {
+                    const copy = [...shiftList];
+                    copy[i] = { ...copy[i], required: v, minPerPersonInPeriod: v ? 0 : (copy[i].minPerPersonInPeriod ?? 0) };
+                    onChange(copy);
+                  }}
+                />
+                <Badge variant={isRequired ? 'default' : 'secondary'} className="text-xs">
+                  {isRequired ? 'Wymagana' : 'Opcjonalna'}
+                </Badge>
+              </div>
+              {isRequired ? (
+                <span className="text-xs text-muted-foreground">
+                  Musi być obsadzona każdego dnia
+                </span>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-muted-foreground whitespace-nowrap">
+                    Min. razy/os. w okresie:
+                  </Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={31}
+                    value={s.minPerPersonInPeriod ?? 0}
+                    onChange={(e) => {
+                      const copy = [...shiftList];
+                      copy[i] = { ...copy[i], minPerPersonInPeriod: Number(e.target.value) };
+                      onChange(copy);
+                    }}
+                    className="w-16 bg-background"
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    {(s.minPerPersonInPeriod ?? 0) === 0 ? '(tylko w razie potrzeby)' : ''}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
       <Button
         variant="outline"
         size="sm"

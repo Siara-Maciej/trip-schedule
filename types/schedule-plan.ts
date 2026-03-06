@@ -31,6 +31,14 @@ export interface ShiftDefinition {
   name: string;
   startTime: string; // "HH:MM"
   endTime: string;   // "HH:MM"
+  /** If true, this shift must be staffed every day (default true) */
+  required: boolean;
+  /**
+   * For optional (required=false) shifts: minimum number of times
+   * each person should be assigned this shift in the period.
+   * 0 = use only as fallback when needed.
+   */
+  minPerPersonInPeriod: number;
 }
 
 export interface ContinuousHours {

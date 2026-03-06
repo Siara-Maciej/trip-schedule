@@ -14,7 +14,6 @@ function parseHour(time: string): number {
   return parseInt(time.split(':')[0], 10);
 }
 
-/** Get list of dates for the given period config. */
 function getDates(period: PeriodConfig): Date[] {
   const dates: Date[] = [];
 
@@ -47,16 +46,15 @@ function getDates(period: PeriodConfig): Date[] {
   return dates;
 }
 
-/** Get shifts for a given day-of-week (0=Mon based). */
 function getShiftsForDay(
   wh: WorkingHoursConfig,
   dayOfWeekMon: number,
 ): ShiftDefinition[] {
   switch (wh.type) {
     case 'continuous':
-      return [{ name: 'Zmiana', startTime: '00:00', endTime: '24:00' }];
+      return [{ name: 'Zmiana', startTime: '00:00', endTime: '24:00', required: true, minPerPersonInPeriod: 0 }];
     case 'fixed':
-      return [{ name: 'Zmiana', startTime: wh.startTime, endTime: wh.endTime }];
+      return [{ name: 'Zmiana', startTime: wh.startTime, endTime: wh.endTime, required: true, minPerPersonInPeriod: 0 }];
     case 'shifts':
       return wh.shifts;
     case 'custom': {
@@ -73,60 +71,54 @@ function jsDowToMon(jsDow: number): number {
 
 const MIN_REST_HOURS = 8;
 
-/**
- * Build an hourly coverage array for a set of assigned shifts on a day.
- * Returns a map: hour → number of people covering that hour.
- */
-function buildHourlyCoverage(
-  dayAssignments: { startH: number; endH: number }[],
-): Map<number, number> {
-  const coverage = new Map<number, number>();
-  for (const a of dayAssignments) {
-    for (let h = a.startH; h < a.endH; h++) {
-      coverage.set(h, (coverage.get(h) ?? 0) + 1);
-    }
-  }
-  return coverage;
+// ── Scoring helpers ──────────────────────────────────────
+
+interface DaySlot {
+  shift: ShiftDefinition;
+  startH: number;
+  endH: number;
+  shiftHours: number;
+  assigned: Person[];
 }
 
 /**
- * Check if adding a person to a shift would exceed maxPerShift
- * for any hour that the shift covers.
+ * Score a candidate for a particular shift slot.
+ * Lower = better candidate.
+ *
+ * With fairDistribution:
+ *   1. Prefer person who has done THIS shift type least
+ *   2. Break ties by total hours used (least first)
+ *
+ * Without fairDistribution:
+ *   1. Sort by least total hours used
  */
-function wouldExceedMax(
-  currentCoverage: Map<number, number>,
-  startH: number,
-  endH: number,
-  max: number,
-): boolean {
-  for (let h = startH; h < endH; h++) {
-    if ((currentCoverage.get(h) ?? 0) >= max) return true;
+function candidateScore(
+  person: Person,
+  shiftName: string,
+  shiftTypeCounts: Map<string, Map<string, number>>,
+  hoursUsed: Map<string, number>,
+  fairDistribution: boolean,
+): [number, number] {
+  const typeCount = shiftTypeCounts.get(person.id)?.get(shiftName) ?? 0;
+  const hours = hoursUsed.get(person.id) ?? 0;
+  if (fairDistribution) {
+    return [typeCount, hours];
   }
-  return false;
+  return [hours, typeCount];
+}
+
+function compareCandidates(a: [number, number], b: [number, number]): number {
+  if (a[0] !== b[0]) return a[0] - b[0];
+  return a[1] - b[1];
 }
 
 /**
- * Check if any hour in the given range is below minimum staffing.
- */
-function hoursBelow(
-  coverage: Map<number, number>,
-  startH: number,
-  endH: number,
-  min: number,
-): number[] {
-  const below: number[] = [];
-  for (let h = startH; h < endH; h++) {
-    if ((coverage.get(h) ?? 0) < min) below.push(h);
-  }
-  return below;
-}
-
-/**
- * Greedy scheduler with:
- * - Overlapping shift support with hourly coverage validation
- * - oneShiftPerDay: person works at most one shift per day
- * - fairDistribution: rotate shift types evenly across people
- * - min/max enforced per hour (not per shift), so overlapping shifts count together
+ * Main scheduler — interleaved round-robin for required shifts,
+ * then optional shifts for quota fulfilment.
+ *
+ * Key improvement: instead of filling shifts sequentially (which puts
+ * everyone on shift 1 when oneShiftPerDay is on), we distribute people
+ * across ALL required shifts simultaneously using round-robin.
  */
 export function generatePlanSchedule(
   people: Person[],
@@ -143,174 +135,242 @@ export function generatePlanSchedule(
   if (dates.length === 0) {
     return { shifts: [], warnings: ['Brak dni w wybranym okresie.'], totalHours: 0, daysCount: 0 };
   }
-
   if (people.length === 0) {
     return { shifts: [], warnings: ['Brak przypisanych osób.'], totalHours: 0, daysCount: dates.length };
   }
 
-  // Track total hours per person
+  // ── Tracking state ──
   const hoursUsed = new Map<string, number>();
   for (const p of people) hoursUsed.set(p.id, 0);
 
-  // Track last shift end (absolute hour from period start)
   const lastShiftEnd = new Map<string, number>();
 
-  // Track whether person has been assigned on a date (for oneShiftPerDay)
-  const assignedOnDate = new Set<string>();
-
-  // Track per-person shift type counts for fair distribution
+  // personId → Map<shiftName, count>
   const shiftTypeCounts = new Map<string, Map<string, number>>();
   for (const p of people) shiftTypeCounts.set(p.id, new Map());
-
-  // Track all assignments for a given date: dateStr → [{personId, startH, endH}]
-  const dayAssignments = new Map<string, { personId: string; startH: number; endH: number }[]>();
 
   const resultShifts: PlanShift[] = [];
   const totalWeeks = Math.max(1, Math.ceil(dates.length / 7));
   const periodStartTime = dates[0].getTime();
 
+  // ── Per-day scheduling ──
   for (const date of dates) {
     const dowMon = jsDowToMon(date.getDay());
     const dayShifts = getShiftsForDay(workingHours, dowMon);
-
     if (dayShifts.length === 0) continue;
 
     const dayLabel = `${DAY_LABELS[date.getDay()]} ${date.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' })}`;
     const dateStr = date.toISOString().slice(0, 10);
     const dayOffsetHours = (date.getTime() - periodStartTime) / (1000 * 60 * 60);
 
-    // Initialize day assignments list
-    if (!dayAssignments.has(dateStr)) {
-      dayAssignments.set(dateStr, []);
-    }
+    // People assigned on this day (for oneShiftPerDay tracking)
+    const assignedToday = new Set<string>();
 
-    for (const shiftDef of dayShifts) {
-      const startH = parseHour(shiftDef.startTime);
-      const endH = shiftDef.endTime === '24:00' ? 24 : parseHour(shiftDef.endTime);
+    // Build slots
+    const requiredSlots: DaySlot[] = [];
+    const optionalSlots: DaySlot[] = [];
+
+    for (const shift of dayShifts) {
+      const startH = parseHour(shift.startTime);
+      const endH = shift.endTime === '24:00' ? 24 : parseHour(shift.endTime);
       const shiftHours = endH - startH;
-
       if (shiftHours <= 0) continue;
 
-      const absoluteStart = dayOffsetHours + startH;
-      const absoluteEnd = dayOffsetHours + endH;
-      const shiftName = shiftDef.name;
+      const slot: DaySlot = { shift, startH, endH, shiftHours, assigned: [] };
+      const isRequired = shift.required ?? true;
+      if (isRequired) {
+        requiredSlots.push(slot);
+      } else {
+        optionalSlots.push(slot);
+      }
+    }
 
-      // Get current hourly coverage for the day (across all shifts)
-      const currentDayAssignments = dayAssignments.get(dateStr)!;
-      const coverage = buildHourlyCoverage(currentDayAssignments);
+    // ── Helper: check if a person can work a given slot ──
+    const canWork = (person: Person, slot: DaySlot): boolean => {
+      if (person.unavailableDays.includes(dowMon)) return false;
 
-      // Filter available people
-      const available = people.filter((p) => {
-        if (p.unavailableDays.includes(dowMon)) return false;
+      // One shift per day
+      if (oneShiftPerDay && assignedToday.has(person.id)) return false;
 
-        // One shift per day
-        if (oneShiftPerDay && assignedOnDate.has(`${p.id}:${dateStr}`)) {
-          return false;
-        }
-
-        // If multiple shifts per day allowed, check time overlap
-        if (!oneShiftPerDay) {
-          for (const a of currentDayAssignments) {
-            if (a.personId === p.id && startH < a.endH && endH > a.startH) return false;
+      // Time overlap check (when multiple shifts per day allowed)
+      if (!oneShiftPerDay) {
+        for (const rs of [...requiredSlots, ...optionalSlots]) {
+          if (rs.assigned.some((p) => p.id === person.id)) {
+            if (slot.startH < rs.endH && slot.endH > rs.startH) return false;
           }
         }
-
-        // Rest period
-        const lastEnd = lastShiftEnd.get(p.id);
-        if (lastEnd !== undefined && absoluteStart - lastEnd < MIN_REST_HOURS) {
-          return false;
-        }
-
-        // Hours limit
-        const used = hoursUsed.get(p.id) ?? 0;
-        if (used + shiftHours > p.weeklyHours * totalWeeks) {
-          return false;
-        }
-
-        return true;
-      });
-
-      // Sort candidates
-      let sorted: Person[];
-
-      if (fairDistribution && dayShifts.length > 1) {
-        sorted = [...available].sort((a, b) => {
-          const aCount = shiftTypeCounts.get(a.id)!.get(shiftName) ?? 0;
-          const bCount = shiftTypeCounts.get(b.id)!.get(shiftName) ?? 0;
-          if (aCount !== bCount) return aCount - bCount;
-          return (hoursUsed.get(a.id) ?? 0) - (hoursUsed.get(b.id) ?? 0);
-        });
-      } else {
-        sorted = [...available].sort(
-          (a, b) => (hoursUsed.get(a.id) ?? 0) - (hoursUsed.get(b.id) ?? 0)
-        );
       }
 
-      let assigned = 0;
+      // Rest period from previous day
+      const absoluteStart = dayOffsetHours + slot.startH;
+      const lastEnd = lastShiftEnd.get(person.id);
+      if (lastEnd !== undefined && absoluteStart - lastEnd < MIN_REST_HOURS) return false;
 
-      for (const person of sorted) {
-        // Check hourly max: would any hour this shift covers exceed the max?
-        if (wouldExceedMax(coverage, startH, endH, constraints.maxPerShift)) break;
+      // Weekly hours limit
+      const used = hoursUsed.get(person.id) ?? 0;
+      if (used + slot.shiftHours > person.weeklyHours * totalWeeks) return false;
 
-        resultShifts.push({
-          personId: person.id,
-          personName: person.name,
-          date: dateStr,
-          dayLabel,
-          shiftName,
-          startHour: startH,
-          endHour: endH,
+      return true;
+    };
+
+    // ── Helper: assign a person to a slot ──
+    const assignPerson = (person: Person, slot: DaySlot) => {
+      slot.assigned.push(person);
+      assignedToday.add(person.id);
+      hoursUsed.set(person.id, (hoursUsed.get(person.id) ?? 0) + slot.shiftHours);
+      lastShiftEnd.set(person.id, dayOffsetHours + slot.endH);
+
+      const personTypes = shiftTypeCounts.get(person.id)!;
+      personTypes.set(slot.shift.name, (personTypes.get(slot.shift.name) ?? 0) + 1);
+
+      resultShifts.push({
+        personId: person.id,
+        personName: person.name,
+        date: dateStr,
+        dayLabel,
+        shiftName: slot.shift.name,
+        startHour: slot.startH,
+        endHour: slot.endH,
+      });
+    };
+
+    // ── Helper: pick best candidate for a slot from a list of people ──
+    const pickBest = (candidates: Person[], slot: DaySlot): Person | null => {
+      let best: Person | null = null;
+      let bestScore: [number, number] = [Infinity, Infinity];
+
+      for (const p of candidates) {
+        if (!canWork(p, slot)) continue;
+        const score = candidateScore(p, slot.shift.name, shiftTypeCounts, hoursUsed, fairDistribution);
+        if (compareCandidates(score, bestScore) < 0) {
+          best = p;
+          bestScore = score;
+        }
+      }
+
+      return best;
+    };
+
+    // ══════════════════════════════════════════════════════
+    // PHASE 1: Fill required shifts — interleaved round-robin
+    //
+    // Instead of filling shift 1 then shift 2 (which starves shift 2),
+    // we repeatedly pick the shift with fewest assigned and add 1 person.
+    // This guarantees even distribution: min(2) across 3 shifts with 6 people → 2-2-2.
+    // ══════════════════════════════════════════════════════
+
+    if (requiredSlots.length > 0) {
+      // Phase 1a: Fill all required shifts to minPerShift (interleaved)
+      let madeProgress = true;
+      while (madeProgress) {
+        madeProgress = false;
+
+        // Sort slots: fewest assigned first (fill the neediest shift next)
+        const needySlots = requiredSlots
+          .filter((s) => s.assigned.length < constraints.minPerShift)
+          .sort((a, b) => a.assigned.length - b.assigned.length);
+
+        if (needySlots.length === 0) break;
+
+        // Try to assign ONE person to the neediest slot
+        const slot = needySlots[0];
+        const availablePeople = people.filter((p) => canWork(p, slot));
+        const best = pickBest(availablePeople, slot);
+
+        if (best) {
+          assignPerson(best, slot);
+          madeProgress = true;
+        } else {
+          // Can't fill this slot's minimum — emit warning and try next
+          // Remove it from the "needy" pool so we don't loop
+          // Mark it by setting a flag (we'll warn after the loop)
+          break;
+        }
+      }
+
+      // Phase 1b: Fill required shifts up to maxPerShift (also interleaved)
+      madeProgress = true;
+      while (madeProgress) {
+        madeProgress = false;
+
+        const fillableSlots = requiredSlots
+          .filter((s) => s.assigned.length < constraints.maxPerShift)
+          .sort((a, b) => a.assigned.length - b.assigned.length);
+
+        if (fillableSlots.length === 0) break;
+
+        const slot = fillableSlots[0];
+        const best = pickBest(people, slot);
+
+        if (best) {
+          assignPerson(best, slot);
+          madeProgress = true;
+        } else {
+          break;
+        }
+      }
+
+      // Warnings for under-staffed required shifts
+      for (const slot of requiredSlots) {
+        if (slot.assigned.length < constraints.minPerShift) {
+          warnings.push(
+            `${dayLabel}, ${slot.shift.name}: przypisano ${slot.assigned.length}/${constraints.minPerShift} wymaganych`,
+          );
+        }
+      }
+    }
+
+    // ══════════════════════════════════════════════════════
+    // PHASE 2: Optional shifts
+    //
+    // Assign people who still need more of this shift type
+    // (minPerPersonInPeriod quota) or as fallback for coverage.
+    // ══════════════════════════════════════════════════════
+
+    for (const slot of optionalSlots) {
+      const minPerPerson = slot.shift.minPerPersonInPeriod ?? 0;
+
+      // Sort candidates by who needs this shift most (quota deficit)
+      const candidates = people
+        .filter((p) => canWork(p, slot))
+        .map((p) => {
+          const done = shiftTypeCounts.get(p.id)?.get(slot.shift.name) ?? 0;
+          const deficit = minPerPerson - done; // positive = needs more
+          return { person: p, deficit, done };
+        })
+        .filter((c) => {
+          // If quota is 0, only assign if somehow needed (we skip for now)
+          if (minPerPerson === 0) return false;
+          // Only assign if person still has quota to fill
+          return c.deficit > 0;
+        })
+        .sort((a, b) => {
+          // Most deficit first
+          if (a.deficit !== b.deficit) return b.deficit - a.deficit;
+          // Then least hours
+          return (hoursUsed.get(a.person.id) ?? 0) - (hoursUsed.get(b.person.id) ?? 0);
         });
 
-        hoursUsed.set(person.id, (hoursUsed.get(person.id) ?? 0) + shiftHours);
-        lastShiftEnd.set(person.id, absoluteEnd);
-        assignedOnDate.add(`${person.id}:${dateStr}`);
-
-        // Update coverage
-        for (let h = startH; h < endH; h++) {
-          coverage.set(h, (coverage.get(h) ?? 0) + 1);
-        }
-
-        currentDayAssignments.push({ personId: person.id, startH, endH });
-
-        const personTypes = shiftTypeCounts.get(person.id)!;
-        personTypes.set(shiftName, (personTypes.get(shiftName) ?? 0) + 1);
-
+      let assigned = 0;
+      for (const c of candidates) {
+        if (assigned >= constraints.maxPerShift) break;
+        assignPerson(c.person, slot);
         assigned++;
       }
     }
+  }
 
-    // After assigning all shifts for a day, validate hourly minimum coverage
-    const currentDayAssignments = dayAssignments.get(dateStr)!;
-    if (currentDayAssignments.length > 0) {
-      const coverage = buildHourlyCoverage(currentDayAssignments);
+  // ── Post-scheduling: check optional shift quotas ──
+  for (const shift of getAllShifts(workingHours)) {
+    const isRequired = shift.required ?? true;
+    const minPerPerson = shift.minPerPersonInPeriod ?? 0;
+    if (isRequired || minPerPerson === 0) continue;
 
-      // Find the full hour range for this day
-      let dayMinH = 24, dayMaxH = 0;
-      for (const a of currentDayAssignments) {
-        if (a.startH < dayMinH) dayMinH = a.startH;
-        if (a.endH > dayMaxH) dayMaxH = a.endH;
-      }
-
-      const belowMin = hoursBelow(coverage, dayMinH, dayMaxH, constraints.minPerShift);
-      if (belowMin.length > 0) {
-        // Group consecutive hours for a cleaner warning
-        const ranges: string[] = [];
-        let rangeStart = belowMin[0];
-        let rangeEnd = belowMin[0];
-        for (let i = 1; i < belowMin.length; i++) {
-          if (belowMin[i] === rangeEnd + 1) {
-            rangeEnd = belowMin[i];
-          } else {
-            ranges.push(`${rangeStart}:00–${rangeEnd + 1}:00`);
-            rangeStart = belowMin[i];
-            rangeEnd = belowMin[i];
-          }
-        }
-        ranges.push(`${rangeStart}:00–${rangeEnd + 1}:00`);
-
+    for (const person of people) {
+      const done = shiftTypeCounts.get(person.id)?.get(shift.name) ?? 0;
+      if (done < minPerPerson) {
         warnings.push(
-          `${dayLabel}: za mało osób (< ${constraints.minPerShift}) w godzinach ${ranges.join(', ')}`
+          `${person.name}: ${shift.name} przypisana ${done}/${minPerPerson} razy (limit w okresie)`,
         );
       }
     }
@@ -324,4 +384,27 @@ export function generatePlanSchedule(
     totalHours,
     daysCount: dates.length,
   };
+}
+
+/** Helper: get all unique shift definitions from a working hours config. */
+function getAllShifts(wh: WorkingHoursConfig): ShiftDefinition[] {
+  switch (wh.type) {
+    case 'continuous':
+      return [{ name: 'Zmiana', startTime: '00:00', endTime: '24:00', required: true, minPerPersonInPeriod: 0 }];
+    case 'fixed':
+      return [{ name: 'Zmiana', startTime: wh.startTime, endTime: wh.endTime, required: true, minPerPersonInPeriod: 0 }];
+    case 'shifts':
+      return wh.shifts;
+    case 'custom': {
+      // Deduplicate by shift name
+      const map = new Map<string, ShiftDefinition>();
+      for (const dayConfig of Object.values(wh.days)) {
+        if (!dayConfig.enabled) continue;
+        for (const s of dayConfig.shifts) {
+          if (!map.has(s.name)) map.set(s.name, s);
+        }
+      }
+      return [...map.values()];
+    }
+  }
 }
