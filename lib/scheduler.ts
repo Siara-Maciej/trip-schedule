@@ -102,6 +102,12 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
 
   const nightConstraint = constraints.find((c): c is NightShiftLimit => c.type === 'nightShiftLimit') ?? null;
 
+  // Per-person expected total hours: full cycles only, no partial shifts
+  const expectedTotalHours = shiftHours.map((s, i) => {
+    const cycle = s + minBreaks[i];
+    return Math.floor(totalHours / cycle) * s;
+  });
+
   // Per-person state: shift/break cycle tracking
   const hoursWorkedSinceBreak: number[] = new Array(peopleCount).fill(0);
   const lastWorkEnd: number[] = new Array(peopleCount).fill(-Infinity);
@@ -195,28 +201,24 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
       continue;
     }
 
-    // Dynamic target: estimate remaining work / remaining time
+    // Dynamic target: remaining expected work / remaining time
     const remainingScheduleHours = Math.max(1, totalHours - seqHour);
     let totalRemainingWork = 0;
     for (let p = 0; p < peopleCount; p++) {
-      const currentShiftRemaining = Math.max(0, shiftHours[p] - hoursWorkedSinceBreak[p]);
-      const timeAfterCurrent = Math.max(0, remainingScheduleHours - currentShiftRemaining);
-      const cycleLen = shiftHours[p] + minBreaks[p];
-      const futureCycles = cycleLen > 0 ? Math.floor(timeAfterCurrent / cycleLen) : 0;
-      const futureWork = futureCycles * shiftHours[p];
-      const leftover = timeAfterCurrent - futureCycles * cycleLen;
-      const leftoverWork = leftover > minBreaks[p]
-        ? Math.min(leftover - minBreaks[p], shiftHours[p])
-        : 0;
-      totalRemainingWork += currentShiftRemaining + futureWork + leftoverWork;
+      totalRemainingWork += Math.max(0, expectedTotalHours[p] - totalWorkHoursArr[p]);
     }
     const targetThisHour = Math.max(1, Math.ceil(totalRemainingWork / remainingScheduleHours));
 
-    // Sort: in-block first, then longest-rested, then fewest total hours
+    // Sort: in-block first, then people who still need hours, then longest-rested, then fewest total
     available.sort((a, b) => {
       const aInBlock = lastWorkEnd[a] === seqHour;
       const bInBlock = lastWorkEnd[b] === seqHour;
       if (aInBlock !== bInBlock) return aInBlock ? -1 : 1;
+
+      // Strongly prefer people who haven't reached their expected total
+      const aReached = totalWorkHoursArr[a] >= expectedTotalHours[a];
+      const bReached = totalWorkHoursArr[b] >= expectedTotalHours[b];
+      if (aReached !== bReached) return aReached ? 1 : -1;
 
       // Among non-in-block: prefer person available longest (break ended earliest)
       if (!aInBlock && !bInBlock) {
@@ -229,12 +231,16 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
     });
 
     // Phase 1: continue in-block people (up to target, for shift continuity)
+    // Skip people who've reached their expected total unless needed for coverage
     let assignedThisHour = 0;
     const assignedSet = new Set<number>();
     for (const p of available) {
       if (lastWorkEnd[p] !== seqHour) break; // sorted: in-block first
       if (assignedThisHour >= targetThisHour) break;
       if (nightHour && nightLimitReached(seqHour)) break;
+      // Don't continue block if person already reached expected total
+      // (unless they're the only option — handled by Phase 2 coverage guarantee)
+      if (totalWorkHoursArr[p] >= expectedTotalHours[p] && assignedThisHour > 0) break;
       assignWork(p, seqHour);
       assignedSet.add(p);
       assignedThisHour++;
@@ -246,6 +252,8 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
       for (const p of available) {
         if (assignedSet.has(p)) continue; // already handled in Phase 1
         if (nightHour && nightLimitReached(seqHour)) break;
+        // Skip people who've reached their expected total (unless nobody else assigned)
+        if (totalWorkHoursArr[p] >= expectedTotalHours[p] && assignedThisHour > 0) continue;
         assignWork(p, seqHour);
         assignedThisHour++;
         break; // max 1 new start per hour

@@ -313,9 +313,10 @@ describe('scheduler — granulacja 1h', () => {
     }
   });
 
-  test('partial last day: everyone gets full shift hours even if schedule ends early', () => {
+  test('partial last day: everyone gets exactly expected hours, no excess', () => {
     // Simulates: start 02:00, end 21:00 three days later (91 hours)
     // 4 people, 8h shifts, 11h breaks, night 00-08 max 1 person
+    // Expected: floor(91/19) = 4 full cycles × 8h = 32h per person
     const result = generateSchedule({
       peopleCount: 4,
       totalHours: 91,
@@ -326,10 +327,13 @@ describe('scheduler — granulacja 1h', () => {
       ],
     });
 
-    // Each person should work at least 4 shifts × 8h = 32h total
+    // No coverage gaps
+    expect(result.coverageGaps).toHaveLength(0);
+
+    // Each person should work exactly 32h (4 shifts × 8h), not more
     for (let p = 0; p < 4; p++) {
-      const totalHours = result.stats[p].totalWorkHours;
-      expect(totalHours).toBeGreaterThanOrEqual(32);
+      const hours = result.stats[p].totalWorkHours;
+      expect(hours).toBe(32);
     }
   });
 });
