@@ -101,7 +101,8 @@ function SchedulePage() {
 
     const diffMs = data.endDate.getTime() - data.startDate.getTime();
     const totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
-    const days = Math.ceil(totalHours / 24);
+    const startHourOffset = data.startDate.getHours();
+    const daysCount = Math.ceil((startHourOffset + totalHours) / 24);
 
     const names = persons.map((p, i) => p.name.trim() || `Osoba ${i + 1}`);
     const constraints = buildConstraints(persons, nightWork);
@@ -109,6 +110,7 @@ function SchedulePage() {
     const scheduleResult = generateSchedule({
       peopleCount: persons.length,
       totalHours,
+      startHourOffset,
       names,
       perPersonShiftHours: persons.map((p) => p.hoursPerShift),
       perPersonMinBreak: persons.map((p) => p.minBreakHours),
@@ -116,7 +118,7 @@ function SchedulePage() {
     });
 
     setResult(scheduleResult);
-    setDurationDays(days);
+    setDurationDays(daysCount);
     setDateRange({
       start: data.startDate.toLocaleString('pl-PL'),
       end: data.endDate.toLocaleString('pl-PL'),

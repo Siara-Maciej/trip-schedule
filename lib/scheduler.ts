@@ -3,16 +3,13 @@ import type {
   NightShiftLimit, ScheduleConstraint,
 } from '@/types/schedule';
 
-// Sprawdź czy godzina mieści się w zakresie (obsługuje przejście przez północ)
 function isHourInRange(hour: number, rangeStart: number, rangeEnd: number): boolean {
   if (rangeStart < rangeEnd) {
     return hour >= rangeStart && hour < rangeEnd;
   }
-  // Zakres przez północ (np. 22-6)
   return hour >= rangeStart || hour < rangeEnd;
 }
 
-// Sprawdź czy osoba jest zablokowana dla danej godziny
 function isPersonBlockedForHour(
   personId: number,
   hour: number,
@@ -28,11 +25,11 @@ function isPersonBlockedForHour(
   return false;
 }
 
-// Łączy posortowaną listę godzin w ciągłe bloki (Shift)
 function mergeHoursIntoShifts(
   personId: number,
   personName: string,
-  hours: number[], // absolutne godziny, posortowane rosnąco
+  hours: number[],
+  offset: number,
 ): Shift[] {
   if (hours.length === 0) return [];
   const shifts: Shift[] = [];
@@ -44,13 +41,13 @@ function mergeHoursIntoShifts(
     if (hours[i] === blockEnd) {
       blockEnd = hours[i] + 1;
     } else {
-      const day = Math.floor(blockStart / 24) + 1;
+      const day = Math.floor((blockStart + offset) / 24) + 1;
       shifts.push({
         personId,
         personName,
         day,
-        startHour: blockStart % 24,
-        endHour: blockEnd % 24 || 24,
+        startHour: (blockStart + offset) % 24,
+        endHour: (blockEnd + offset) % 24 || 24,
         type: 'WORK',
       });
       blockStart = hours[i];
@@ -58,13 +55,13 @@ function mergeHoursIntoShifts(
     }
   }
 
-  const day = Math.floor(blockStart / 24) + 1;
+  const day = Math.floor((blockStart + offset) / 24) + 1;
   shifts.push({
     personId,
     personName,
     day,
-    startHour: blockStart % 24,
-    endHour: blockEnd % 24 || 24,
+    startHour: (blockStart + offset) % 24,
+    endHour: (blockEnd + offset) % 24 || 24,
     type: 'WORK',
   });
 
@@ -73,19 +70,19 @@ function mergeHoursIntoShifts(
 
 /**
  * Generuje harmonogram pracy z granulacją 1-godzinną.
- * Wspiera per-person hoursPerShift i minBreakHours.
+ * Respektuje startHourOffset — harmonogram zaczyna się od podanej godziny,
+ * nie od północy. Łączna liczba godzin to totalHours.
  */
 export function generateSchedule(params: ScheduleParams): ScheduleResult {
   const {
     peopleCount,
     totalHours,
+    startHourOffset = 0,
     names = [],
     perPersonShiftHours = [],
     perPersonMinBreak = [],
     constraints = [],
   } = params;
-
-  const durationDays = Math.ceil(totalHours / 24);
 
   const errors: string[] = [];
   const coverageGaps: TimeGap[] = [];
@@ -94,53 +91,66 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
     names[i]?.trim() || `Osoba ${i + 1}`
   );
 
-  // Per-person params with defaults
   const shiftHours = Array.from({ length: peopleCount }, (_, i) => perPersonShiftHours[i] ?? 8);
   const minBreaks = Array.from({ length: peopleCount }, (_, i) => perPersonMinBreak[i] ?? 11);
 
-  // Constraint nocny
   const nightConstraint = constraints.find((c): c is NightShiftLimit => c.type === 'nightShiftLimit') ?? null;
 
-  // Stan per osoba
   const hoursWorkedSinceBreak: number[] = new Array(peopleCount).fill(0);
   const lastWorkEnd: number[] = new Array(peopleCount).fill(-Infinity);
-  const totalWorkHours: number[] = new Array(peopleCount).fill(0);
+  const totalWorkHoursArr: number[] = new Array(peopleCount).fill(0);
 
   const workHoursByPerson: number[][] = Array.from({ length: peopleCount }, () => []);
   const hourAssignments = new Map<number, Set<number>>();
 
-  function canPersonWorkHour(p: number, absoluteHour: number, hoursWorkedToday: number): boolean {
-    const hour = absoluteHour % 24;
+  // Track per-calendar-day work hours for shift limits
+  const hoursWorkedPerDay: Map<string, number>[] = Array.from({ length: peopleCount }, () => new Map());
+
+  function getCalendarDay(seqHour: number): number {
+    return Math.floor((seqHour + startHourOffset) / 24) + 1;
+  }
+
+  function getClockHour(seqHour: number): number {
+    return (seqHour + startHourOffset) % 24;
+  }
+
+  function getDayKey(seqHour: number): string {
+    return String(getCalendarDay(seqHour));
+  }
+
+  function getHoursWorkedToday(p: number, seqHour: number): number {
+    return hoursWorkedPerDay[p].get(getDayKey(seqHour)) ?? 0;
+  }
+
+  function canPersonWorkHour(p: number, seqHour: number): boolean {
+    const clockHour = getClockHour(seqHour);
     const personShift = shiftHours[p];
     const personBreak = minBreaks[p];
+    const workedToday = getHoursWorkedToday(p, seqHour);
 
-    if (hoursWorkedToday >= personShift) return false;
+    if (workedToday >= personShift) return false;
 
-    if (isPersonBlockedForHour(p, hour, constraints)) return false;
+    if (isPersonBlockedForHour(p, clockHour, constraints)) return false;
 
     if (lastWorkEnd[p] !== -Infinity) {
-      const gap = absoluteHour - lastWorkEnd[p];
-
-      if (gap >= personBreak) {
-        // OK — natural break
-      } else if (hoursWorkedSinceBreak[p] >= personShift) {
+      const gap = seqHour - lastWorkEnd[p];
+      if (gap < personBreak && hoursWorkedSinceBreak[p] >= personShift) {
         return false;
       }
     }
 
-    if (nightConstraint && isHourInRange(hour, nightConstraint.nightStartHour, nightConstraint.nightEndHour)) {
-      const assigned = hourAssignments.get(absoluteHour);
-      const currentNightPeople = assigned ? assigned.size : 0;
-      if (currentNightPeople >= nightConstraint.maxPeople) return false;
+    if (nightConstraint && isHourInRange(clockHour, nightConstraint.nightStartHour, nightConstraint.nightEndHour)) {
+      const assigned = hourAssignments.get(seqHour);
+      if (assigned && assigned.size >= nightConstraint.maxPeople) return false;
     }
 
     return true;
   }
 
-  function assignWork(p: number, absoluteHour: number) {
+  function assignWork(p: number, seqHour: number) {
     const personBreak = minBreaks[p];
     if (lastWorkEnd[p] !== -Infinity) {
-      const gap = absoluteHour - lastWorkEnd[p];
+      const gap = seqHour - lastWorkEnd[p];
       if (gap >= personBreak) {
         hoursWorkedSinceBreak[p] = 0;
       }
@@ -149,111 +159,132 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
     }
 
     hoursWorkedSinceBreak[p]++;
-    lastWorkEnd[p] = absoluteHour + 1;
-    totalWorkHours[p]++;
-    workHoursByPerson[p].push(absoluteHour);
+    lastWorkEnd[p] = seqHour + 1;
+    totalWorkHoursArr[p]++;
+    workHoursByPerson[p].push(seqHour);
 
-    if (!hourAssignments.has(absoluteHour)) {
-      hourAssignments.set(absoluteHour, new Set());
+    const dayKey = getDayKey(seqHour);
+    hoursWorkedPerDay[p].set(dayKey, (hoursWorkedPerDay[p].get(dayKey) ?? 0) + 1);
+
+    if (!hourAssignments.has(seqHour)) {
+      hourAssignments.set(seqHour, new Set());
     }
-    hourAssignments.get(absoluteHour)!.add(p);
+    hourAssignments.get(seqHour)!.add(p);
   }
 
-  for (let day = 1; day <= durationDays; day++) {
-    const hoursWorkedToday: number[] = new Array(peopleCount).fill(0);
-    const workedToday: boolean[] = new Array(peopleCount).fill(false);
+  // Main loop: iterate exactly totalHours sequential hours
+  // Group by calendar day for daily shift accounting
+  let currentDay = getCalendarDay(0);
+  const workedToday: boolean[] = new Array(peopleCount).fill(false);
 
-    for (let hour = 0; hour < 24; hour++) {
-      const absoluteHour = (day - 1) * 24 + hour;
+  for (let seqHour = 0; seqHour < totalHours; seqHour++) {
+    const day = getCalendarDay(seqHour);
 
-      const available: number[] = [];
+    // Reset daily tracking when day changes
+    if (day !== currentDay) {
       for (let p = 0; p < peopleCount; p++) {
-        if (canPersonWorkHour(p, absoluteHour, hoursWorkedToday[p])) {
-          available.push(p);
+        if (!workedToday[p]) {
+          errors.push(
+            `${personNames[p]} nie ma przydzielonej pracy w dniu ${currentDay} — brak dostępnych godzin (przerwa/ograniczenia).`
+          );
         }
+        workedToday[p] = false;
       }
-
-      // Ile osób powinno pracować tę godzinę?
-      let remainingPersonHours = 0;
-      for (let p = 0; p < peopleCount; p++) {
-        remainingPersonHours += Math.max(0, shiftHours[p] - hoursWorkedToday[p]);
-      }
-      const remainingDayHours = 24 - hour;
-      const targetThisHour = Math.max(1, Math.ceil(remainingPersonHours / remainingDayHours));
-
-      if (available.length === 0) {
-        const assigned = hourAssignments.get(absoluteHour);
-        if (!assigned || assigned.size === 0) {
-          coverageGaps.push({ day, startHour: hour, endHour: hour + 1 });
-        }
-        continue;
-      }
-
-      available.sort((a, b) => {
-        const aInBlock = lastWorkEnd[a] === absoluteHour;
-        const bInBlock = lastWorkEnd[b] === absoluteHour;
-        if (aInBlock !== bInBlock) return aInBlock ? -1 : 1;
-
-        if (workedToday[a] !== workedToday[b]) return workedToday[a] ? 1 : -1;
-
-        if (hoursWorkedToday[a] !== hoursWorkedToday[b]) return hoursWorkedToday[a] - hoursWorkedToday[b];
-
-        return totalWorkHours[a] - totalWorkHours[b];
-      });
-
-      const toAssign = Math.min(targetThisHour, available.length);
-      for (let i = 0; i < toAssign; i++) {
-        const p = available[i];
-
-        const hourMod = absoluteHour % 24;
-        if (nightConstraint && isHourInRange(hourMod, nightConstraint.nightStartHour, nightConstraint.nightEndHour)) {
-          const assigned = hourAssignments.get(absoluteHour);
-          if (assigned && assigned.size >= nightConstraint.maxPeople) break;
-        }
-
-        assignWork(p, absoluteHour);
-        hoursWorkedToday[p]++;
-        workedToday[p] = true;
-      }
+      currentDay = day;
     }
 
+    const available: number[] = [];
     for (let p = 0; p < peopleCount; p++) {
-      if (!workedToday[p]) {
-        errors.push(
-          `${personNames[p]} nie ma przydzielonej pracy w dniu ${day} — brak dostępnych godzin (przerwa/ograniczenia).`
-        );
+      if (canPersonWorkHour(p, seqHour)) {
+        available.push(p);
       }
     }
-  }
 
-  // Sprawdź pokrycie
-  for (let day = 1; day <= durationDays; day++) {
-    for (let hour = 0; hour < 24; hour++) {
-      const absoluteHour = (day - 1) * 24 + hour;
-      const assigned = hourAssignments.get(absoluteHour);
+    // Calculate target workers this hour
+    // Count remaining day hours (in this calendar day within schedule range)
+    let remainingDayHoursInSchedule = 0;
+    for (let fh = seqHour; fh < totalHours && getCalendarDay(fh) === day; fh++) {
+      remainingDayHoursInSchedule++;
+    }
+    let remainingPersonHours = 0;
+    for (let p = 0; p < peopleCount; p++) {
+      remainingPersonHours += Math.max(0, shiftHours[p] - getHoursWorkedToday(p, seqHour));
+    }
+    const targetThisHour = Math.max(1, Math.ceil(remainingPersonHours / Math.max(1, remainingDayHoursInSchedule)));
+
+    if (available.length === 0) {
+      const assigned = hourAssignments.get(seqHour);
       if (!assigned || assigned.size === 0) {
-        const alreadyGap = coverageGaps.some(
-          (g) => g.day === day && g.startHour === hour
-        );
-        if (!alreadyGap) {
-          coverageGaps.push({ day, startHour: hour, endHour: hour + 1 });
-        }
+        coverageGaps.push({ day, startHour: getClockHour(seqHour), endHour: getClockHour(seqHour) + 1 });
+      }
+      continue;
+    }
+
+    available.sort((a, b) => {
+      const aInBlock = lastWorkEnd[a] === seqHour;
+      const bInBlock = lastWorkEnd[b] === seqHour;
+      if (aInBlock !== bInBlock) return aInBlock ? -1 : 1;
+
+      if (workedToday[a] !== workedToday[b]) return workedToday[a] ? 1 : -1;
+
+      const aToday = getHoursWorkedToday(a, seqHour);
+      const bToday = getHoursWorkedToday(b, seqHour);
+      if (aToday !== bToday) return aToday - bToday;
+
+      return totalWorkHoursArr[a] - totalWorkHoursArr[b];
+    });
+
+    const toAssign = Math.min(targetThisHour, available.length);
+    for (let i = 0; i < toAssign; i++) {
+      const p = available[i];
+      const clockHour = getClockHour(seqHour);
+
+      if (nightConstraint && isHourInRange(clockHour, nightConstraint.nightStartHour, nightConstraint.nightEndHour)) {
+        const assigned = hourAssignments.get(seqHour);
+        if (assigned && assigned.size >= nightConstraint.maxPeople) break;
+      }
+
+      assignWork(p, seqHour);
+      workedToday[p] = true;
+    }
+  }
+
+  // Check last day's workers
+  for (let p = 0; p < peopleCount; p++) {
+    if (!workedToday[p]) {
+      errors.push(
+        `${personNames[p]} nie ma przydzielonej pracy w dniu ${currentDay} — brak dostępnych godzin (przerwa/ograniczenia).`
+      );
+    }
+  }
+
+  // Check coverage
+  for (let seqHour = 0; seqHour < totalHours; seqHour++) {
+    const assigned = hourAssignments.get(seqHour);
+    if (!assigned || assigned.size === 0) {
+      const day = getCalendarDay(seqHour);
+      const clockHour = getClockHour(seqHour);
+      const alreadyGap = coverageGaps.some(
+        (g) => g.day === day && g.startHour === clockHour
+      );
+      if (!alreadyGap) {
+        coverageGaps.push({ day, startHour: clockHour, endHour: clockHour + 1 });
       }
     }
   }
 
-  // Scal godziny w ciągłe zmiany
+  // Merge hours into shifts
   const shifts: Shift[] = [];
   for (let p = 0; p < peopleCount; p++) {
     workHoursByPerson[p].sort((a, b) => a - b);
-    shifts.push(...mergeHoursIntoShifts(p, personNames[p], workHoursByPerson[p]));
+    shifts.push(...mergeHoursIntoShifts(p, personNames[p], workHoursByPerson[p], startHourOffset));
   }
 
-  // Statystyki
+  // Stats
   const stats: PersonStats[] = personNames.map((name, i) => {
     const personShifts = shifts.filter((s) => s.personId === i);
     let minBreak = Infinity;
-    const sortedShifts = personShifts.sort((a, b) => {
+    const sortedShifts = [...personShifts].sort((a, b) => {
       const absA = (a.day - 1) * 24 + a.startHour;
       const absB = (b.day - 1) * 24 + b.startHour;
       return absA - absB;
@@ -268,7 +299,7 @@ export function generateSchedule(params: ScheduleParams): ScheduleResult {
     return {
       personId: i,
       personName: name,
-      totalWorkHours: totalWorkHours[i],
+      totalWorkHours: totalWorkHoursArr[i],
       shiftsCount: personShifts.length,
       minBreakActual: minBreak === Infinity ? 0 : minBreak,
     };

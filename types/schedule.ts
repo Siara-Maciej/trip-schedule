@@ -61,6 +61,8 @@ export interface ScheduleParams {
   peopleCount: number;
   /** Total hours to schedule (derived from start/end dates) */
   totalHours: number;
+  /** Clock hour (0-23) at which the schedule starts on day 1; default 0 */
+  startHourOffset?: number;
   names?: string[];
   /** Per-person shift duration; falls back to 8 if missing */
   perPersonShiftHours?: number[];

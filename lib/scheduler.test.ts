@@ -247,4 +247,31 @@ describe('scheduler — granulacja 1h', () => {
       expect(getPersonHoursPerDay(result, 2, day).length).toBeLessThanOrEqual(10);
     }
   });
+
+  // --- Start hour offset ---
+
+  test('startHourOffset: schedule starts at hour 14, no work before 14:00 on day 1', () => {
+    const result = generateSchedule({
+      peopleCount: 3,
+      totalHours: 48, // 48h from 14:00 day1 to 14:00 day3
+      startHourOffset: 14,
+      ...uniformParams(3, 8, 8),
+    });
+
+    // Day 1 should only have work from 14:00 onwards
+    for (let p = 0; p < 3; p++) {
+      const hours = getPersonHoursPerDay(result, p, 1);
+      for (const h of hours) {
+        expect(h).toBeGreaterThanOrEqual(14);
+      }
+    }
+
+    // Day 3 should only have work before 14:00
+    for (let p = 0; p < 3; p++) {
+      const hours = getPersonHoursPerDay(result, p, 3);
+      for (const h of hours) {
+        expect(h).toBeLessThan(14);
+      }
+    }
+  });
 });

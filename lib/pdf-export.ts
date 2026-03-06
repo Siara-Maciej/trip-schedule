@@ -212,40 +212,6 @@ export function generatePDF({
     y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
   }
 
-  // --- Szczegółowa lista zmian ---
-  if (y > doc.internal.pageSize.getHeight() - 30) {
-    doc.addPage();
-    y = 15;
-  }
-
-  doc.setFontSize(12);
-  doc.text('Szczegolowa lista zmian', 14, y);
-  y += 2;
-
-  const shiftsSorted = [...result.shifts].sort((a, b) => {
-    const absA = (a.day - 1) * 24 + a.startHour;
-    const absB = (b.day - 1) * 24 + b.startHour;
-    return absA - absB;
-  });
-
-  const shiftRows = shiftsSorted.map((s) => [
-    `Dzien ${s.day}`,
-    s.personName,
-    `${String(s.startHour).padStart(2, '0')}:00`,
-    `${String(s.endHour).padStart(2, '0')}:00`,
-    `${s.endHour - s.startHour}h`,
-  ]);
-
-  autoTable(doc, {
-    startY: y,
-    head: [['Dzien', 'Osoba', 'Od', 'Do', 'Czas']],
-    body: shiftRows,
-    theme: 'grid',
-    headStyles: { fillColor: [40, 40, 40], fontSize: 8 },
-    bodyStyles: { fontSize: 7 },
-    margin: { left: 14, right: 14 },
-  });
-
   // --- Stopka na każdej stronie ---
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
