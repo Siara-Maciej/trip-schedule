@@ -75,7 +75,7 @@ export function PersonCreator({ persons, onChange }: PersonCreatorProps) {
                   placeholder={`Osoba ${i + 1}`}
                   value={person.name}
                   onChange={(e) => updatePerson(i, { name: e.target.value })}
-                  className="h-8 text-sm flex-1"
+                  className="h-8 text-base flex-1"
                 />
                 <button
                     type="button"

@@ -85,7 +85,7 @@ export function DurationInput({ value, onChange, min = 1, max = 24, className, d
         disabled={disabled}
         maxLength={2}
         className={cn(
-          'flex h-9 w-16 rounded-md border border-input bg-transparent px-2 py-1 text-sm shadow-sm transition-colors',
+          'flex h-9 w-16 rounded-md border border-input bg-transparent px-2 py-1 text-base shadow-sm transition-colors',
           'placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
           'disabled:cursor-not-allowed disabled:opacity-50 text-center font-mono',
           className,
