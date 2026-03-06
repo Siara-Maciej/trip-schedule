@@ -278,6 +278,44 @@ export async function generateSchedule(params: ScheduleParams): Promise<Schedule
     })
   );
 
+  // Pre-check: detect hours that no shift can cover (all people blocked)
+  for (let h = 0; h < totalHours; h++) {
+    const clockHour = (h + startHourOffset) % 24;
+    let canBeCovered = false;
+    for (let p = 0; p < peopleCount; p++) {
+      const S = shiftHours[p];
+      // Check if any shift containing seq hour h is valid for person p
+      for (let t = Math.max(0, h - S + 1); t <= h && t + S <= totalHours; t++) {
+        let valid = true;
+        for (let hh = t; hh < t + S; hh++) {
+          if (blocked[p][hh]) { valid = false; break; }
+        }
+        if (valid) { canBeCovered = true; break; }
+      }
+      if (canBeCovered) break;
+    }
+    if (!canBeCovered) {
+      const isNight = nightConstraint && isHourInRange(clockHour, nightConstraint.nightStartHour, nightConstraint.nightEndHour);
+      if (isNight) {
+        errors.push(
+          `Godzina ${clockHour}:00 nie może być pokryta — żadna osoba nie może pracować w nocy. ` +
+          `Oznacz przynajmniej 1 osobę jako \"może pracować w nocy\".`
+        );
+      } else {
+        errors.push(
+          `Godzina ${clockHour}:00 nie może być pokryta — wszyscy są zablokowani.`
+        );
+      }
+      // Return early with clear error
+      return {
+        shifts: [], valid: false, errors: [...new Set(errors)], coverageGaps: [],
+        stats: personNames.map((name, i) => ({
+          personId: i, personName: name, totalWorkHours: 0, shiftsCount: 0, minBreakActual: 0,
+        })),
+      };
+    }
+  }
+
   // Target shifts per person: full cycles
   const targetShifts = shiftHours.map((s, i) => {
     const cycle = s + minBreaks[i];
