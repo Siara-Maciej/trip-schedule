@@ -12,6 +12,8 @@ import {
   RotateCcw,
   Check,
   Users,
+  ShieldCheck,
+  Shuffle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -118,6 +120,8 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
   // Constraints
   const [minStaff, setMinStaff] = useState(2);
   const [maxStaff, setMaxStaff] = useState(3);
+  const [oneShiftPerDay, setOneShiftPerDay] = useState(true);
+  const [fairDistribution, setFairDistribution] = useState(true);
 
   // Template name for saving
   const [templateName, setTemplateName] = useState('');
@@ -130,6 +134,8 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
     setIncludeWeekends(t.includeWeekends);
     setMinStaff(t.constraints.minPerShift);
     setMaxStaff(t.constraints.maxPerShift);
+    setOneShiftPerDay(t.constraints.oneShiftPerDay ?? true);
+    setFairDistribution(t.constraints.fairDistribution ?? true);
 
     const wh = t.workingHours;
     setHoursType(wh.type);
@@ -184,7 +190,7 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
     onNext({
       period,
       workingHours: buildWorkingHours(),
-      constraints: { minPerShift: minStaff, maxPerShift: maxStaff },
+      constraints: { minPerShift: minStaff, maxPerShift: maxStaff, oneShiftPerDay, fairDistribution },
     });
   };
 
@@ -195,7 +201,7 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
       name: templateName.trim(),
       periodType,
       workingHours: buildWorkingHours(),
-      constraints: { minPerShift: minStaff, maxPerShift: maxStaff },
+      constraints: { minPerShift: minStaff, maxPerShift: maxStaff, oneShiftPerDay, fairDistribution },
       includeWeekends,
       createdAt: new Date().toISOString(),
     };
@@ -333,6 +339,12 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                         <Users className="h-3 w-3 shrink-0" />
                         <span>{t.constraints.minPerShift}–{t.constraints.maxPerShift} os./zmianę</span>
+                        {(t.constraints.oneShiftPerDay ?? true) && (
+                          <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px]">1/dzień</Badge>
+                        )}
+                        {(t.constraints.fairDistribution ?? true) && (
+                          <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px]">rotacja</Badge>
+                        )}
                       </div>
                     </div>
 
@@ -629,9 +641,9 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Wymagania kadrowe</CardTitle>
-          <CardDescription>Min. i maks. pracowników na zmianie</CardDescription>
+          <CardDescription>Liczba pracowników i zasady przydziału zmian</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-5">
           <div className="flex items-center gap-4">
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Minimum</Label>
@@ -654,6 +666,46 @@ export function PeriodStep({ templates, onSaveTemplate, onDeleteTemplate, onNext
                 onChange={(e) => setMaxStaff(Number(e.target.value))}
                 className="w-20 bg-background"
               />
+            </div>
+          </div>
+
+          <Separator />
+
+          <div className="space-y-4">
+            <div className="flex items-start gap-3">
+              <Switch
+                id="oneShiftPerDay"
+                checked={oneShiftPerDay}
+                onCheckedChange={setOneShiftPerDay}
+                className="mt-0.5"
+              />
+              <div>
+                <Label htmlFor="oneShiftPerDay" className="flex items-center gap-1.5 text-sm font-medium">
+                  <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
+                  Maks. 1 zmiana na osobę dziennie
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Każda osoba może pracować tylko na jednej zmianie danego dnia
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <Switch
+                id="fairDistribution"
+                checked={fairDistribution}
+                onCheckedChange={setFairDistribution}
+                className="mt-0.5"
+              />
+              <div>
+                <Label htmlFor="fairDistribution" className="flex items-center gap-1.5 text-sm font-medium">
+                  <Shuffle className="h-3.5 w-3.5 text-muted-foreground" />
+                  Równomierny przydział zmian
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Rotacja typów zmian między osobami — nikt nie dostaje ciągle tej samej zmiany
+                </p>
+              </div>
             </div>
           </div>
         </CardContent>

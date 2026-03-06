@@ -69,6 +69,10 @@ export type WorkingHoursConfig =
 export interface StaffConstraints {
   minPerShift: number;
   maxPerShift: number;
+  /** If true, a person can only work one shift per day */
+  oneShiftPerDay: boolean;
+  /** If true, rotate shift types evenly across people */
+  fairDistribution: boolean;
 }
 
 // ── Template (reusable preset) ──────────────────────────
