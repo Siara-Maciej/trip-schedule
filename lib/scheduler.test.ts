@@ -357,6 +357,197 @@ describe('scheduler — MIP (HiGHS)', () => {
     }
   });
 
+  // === TESTY DLA 6 OSÓB ===
+
+  test('6 osób, 8h praca, 3 doby, 11h przerwy → valid, pełne pokrycie', async () => {
+    const result = await generateSchedule({
+      peopleCount: 6,
+      totalHours: 24 * 3,
+      ...uniformParams(6, 8, 11),
+    });
+    expect(result.valid).toBe(true);
+    expect(result.coverageGaps).toHaveLength(0);
+    expect(result.errors).toHaveLength(0);
+
+    // Każda godzina ma co najmniej 1 osobę
+    for (let day = 1; day <= 3; day++) {
+      for (let h = 0; h < 24; h++) {
+        const hasWorker = result.shifts.some(
+          (s) => s.day === day && s.startHour <= h && s.endHour > h
+        );
+        expect(hasWorker).toBe(true);
+      }
+    }
+  });
+
+  test('6 osób, 8h praca, 7 dni, 11h przerwy → valid, sprawiedliwy rozkład', async () => {
+    const result = await generateSchedule({
+      peopleCount: 6,
+      totalHours: 24 * 7,
+      ...uniformParams(6, 8, 11),
+    });
+    expect(result.valid).toBe(true);
+    expect(result.coverageGaps).toHaveLength(0);
+
+    // Sprawdź sprawiedliwy rozkład godzin — rozpiętość max 16h
+    const hours = result.stats.map(s => s.totalWorkHours);
+    const maxDiff = Math.max(...hours) - Math.min(...hours);
+    expect(maxDiff).toBeLessThanOrEqual(16);
+  });
+
+  test('6 osób, 8h praca, 3 doby — przerwy >= 11h między zmianami', async () => {
+    const minBreakHours = 11;
+    const result = await generateSchedule({
+      peopleCount: 6,
+      totalHours: 24 * 3,
+      ...uniformParams(6, 8, minBreakHours),
+    });
+    expect(result.valid).toBe(true);
+
+    // Sprawdź przerwy
+    for (let p = 0; p < 6; p++) {
+      const allHours: number[] = [];
+      for (const shift of result.shifts) {
+        if (shift.personId === p) {
+          for (let h = shift.startHour; h < shift.endHour; h++) {
+            allHours.push((shift.day - 1) * 24 + h);
+          }
+        }
+      }
+      allHours.sort((a, b) => a - b);
+
+      // Znajdź przerwy między blokami pracy
+      for (let i = 1; i < allHours.length; i++) {
+        const gap = allHours[i] - allHours[i - 1];
+        if (gap > 1) {
+          // To jest przerwa
+          expect(gap).toBeGreaterThanOrEqual(minBreakHours);
+        }
+      }
+    }
+  });
+
+  test('6 osób, daily cap: max 8h pracy na dzień kalendarzowy', async () => {
+    const result = await generateSchedule({
+      peopleCount: 6,
+      totalHours: 24 * 3,
+      ...uniformParams(6, 8, 11),
+    });
+    expect(result.valid).toBe(true);
+
+    for (let p = 0; p < 6; p++) {
+      for (let d = 1; d <= 3; d++) {
+        const hours = getPersonHoursPerDay(result, p, d);
+        expect(hours.length).toBeLessThanOrEqual(8);
+      }
+    }
+  });
+
+  test('6 osób z limitem nocnym: max 2 osoby w nocy (22-6)', async () => {
+    const result = await generateSchedule({
+      peopleCount: 6,
+      totalHours: 24 * 3,
+      ...uniformParams(6, 8, 11),
+      constraints: [
+        { type: 'nightShiftLimit', maxPeople: 2, nightStartHour: 22, nightEndHour: 6 },
+      ],
+    });
+    expect(result.valid).toBe(true);
+    expect(result.coverageGaps).toHaveLength(0);
+
+    for (let day = 1; day <= 3; day++) {
+      for (let h = 0; h < 24; h++) {
+        if (h >= 22 || h < 6) {
+          const workingNow = result.shifts.filter(
+            (s) => s.day === day && s.startHour <= h && s.endHour > h
+          );
+          expect(workingNow.length).toBeLessThanOrEqual(2);
+        }
+      }
+    }
+  });
+
+  test('6 osób, różne długości zmian i przerw', async () => {
+    const result = await generateSchedule({
+      peopleCount: 6,
+      totalHours: 24 * 3,
+      perPersonShiftHours: [6, 8, 8, 10, 12, 6],
+      perPersonMinBreak: [6, 8, 11, 10, 12, 6],
+    });
+
+    // Powinno się udać wygenerować
+    expect(result.coverageGaps).toHaveLength(0);
+
+    // Sprawdź limity zmian per osoba
+    const shiftLimits = [6, 8, 8, 10, 12, 6];
+    const breakLimits = [6, 8, 11, 10, 12, 6];
+    for (let p = 0; p < 6; p++) {
+      const allHours: number[] = [];
+      for (const shift of result.shifts) {
+        if (shift.personId === p) {
+          for (let h = shift.startHour; h < shift.endHour; h++) {
+            allHours.push((shift.day - 1) * 24 + h);
+          }
+        }
+      }
+      allHours.sort((a, b) => a - b);
+
+      let accumulated = 0;
+      let lastEnd = -Infinity;
+      for (const hour of allHours) {
+        if (hour - lastEnd >= breakLimits[p]) {
+          accumulated = 0;
+        }
+        accumulated++;
+        lastEnd = hour + 1;
+        expect(accumulated).toBeLessThanOrEqual(shiftLimits[p]);
+      }
+    }
+  });
+
+  test('6 osób, startHourOffset=14, 5 dni', async () => {
+    const result = await generateSchedule({
+      peopleCount: 6,
+      totalHours: 24 * 5,
+      startHourOffset: 14,
+      ...uniformParams(6, 8, 11),
+    });
+    expect(result.valid).toBe(true);
+    expect(result.coverageGaps).toHaveLength(0);
+
+    // Day 1 only has work from 14:00 onwards
+    for (let p = 0; p < 6; p++) {
+      const hours = getPersonHoursPerDay(result, p, 1);
+      for (const h of hours) {
+        expect(h).toBeGreaterThanOrEqual(14);
+      }
+    }
+  });
+
+  test('6 osób z 2 zablokowanymi nocą — nadal pełne pokrycie', async () => {
+    const result = await generateSchedule({
+      peopleCount: 6,
+      totalHours: 24 * 3,
+      ...uniformParams(6, 8, 11),
+      constraints: [
+        { type: 'personBlocked', personId: 0, startHour: 22, endHour: 6 },
+        { type: 'personBlocked', personId: 1, startHour: 22, endHour: 6 },
+      ],
+    });
+    expect(result.valid).toBe(true);
+    expect(result.coverageGaps).toHaveLength(0);
+
+    // Osoby 0 i 1 nie pracują w nocy
+    for (let day = 1; day <= 3; day++) {
+      for (const blockedPerson of [0, 1]) {
+        const hours = getPersonHoursPerDay(result, blockedPerson, day);
+        for (const h of hours) {
+          expect(h >= 6 && h < 22).toBe(true);
+        }
+      }
+    }
+  });
+
   test('partial last day: everyone gets exactly expected hours, no excess', async () => {
     const result = await generateSchedule({
       peopleCount: 4,
